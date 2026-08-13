@@ -3953,7 +3953,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         }
         builder.append("延迟/解码：");
         builder.append(stats.networkLatencyMs).append(" ms / ");
-        builder.append(stats.decodeTimeMs > 0 ? String.format(Locale.US, "%.2f ms", stats.decodeTimeMs) : "--");
+        builder.append(stats.decodeTimeMs >= 0 ? String.format(Locale.US, "%.2f ms", stats.decodeTimeMs) : "--");
         builder.append("  丢包率：").append(String.format(Locale.US, "%.2f%%", stats.packetLossPercent));
         builder.append("  FPS：").append(String.format(Locale.US, "%.2f", stats.totalFps));
         if (micStatus == 1) {
@@ -4007,7 +4007,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 ? stats.networkLatencyMs + " ms / 抖动 " + stats.networkLatencyVarianceMs + " ms"
                 : "--");
         addPerfRow("丢包率", String.format(Locale.US, "%.2f%%", stats.packetLossPercent));
-        addPerfRow("解码延迟", stats.decodeTimeMs > 0 ? String.format(Locale.US, "%.2f ms", stats.decodeTimeMs) : "--");
+        addPerfRow("解码延迟", stats.decodeTimeMs >= 0 ? String.format(Locale.US, "%.2f ms", stats.decodeTimeMs) : "--");
         addPerfRow("主机延迟", stats.hostProcessingLatencyMs > 0 ? String.format(Locale.US, "%.1f ms", stats.hostProcessingLatencyMs) : "--");
         addPerfRow("麦克风", micStatus == 1 ? "开启" : "关闭");
         addPerfRow("游戏震动", buildNativeGameHapticsStatusText());

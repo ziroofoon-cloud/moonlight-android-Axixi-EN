@@ -12,7 +12,7 @@ public class PerfOverlayStats {
     public float receivedFps;
     public float renderedFps;
     public float packetLossPercent;
-    public float decodeTimeMs;
+    public float decodeTimeMs = -1f;
     public float hostProcessingLatencyMs;
     public float networkRateKbps;
     public float videoRateKbps;

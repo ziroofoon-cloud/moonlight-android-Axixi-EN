@@ -1212,12 +1212,15 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                 outputBufferQueue.add(lastIndex);
                             }
 
-                            // Add delta time to the totals (excluding probable outliers)
-                            long delta = SystemClock.uptimeMillis() - (presentationTimeUs / 1000);
-                            if (delta >= 0 && delta < 1000) {
-                                activeWindowVideoStats.decoderTimeMs += delta;
+                            // MediaCodec returns the Java monotonic timestamp that we supplied with
+                            // the input buffer, so the output delta does not depend on Moonlight Core's
+                            // session-relative clock epoch.
+                            long deltaUs = getMonotonicTimeUs() - presentationTimeUs;
+                            if (deltaUs >= 0 && deltaUs < 1_000_000) {
+                                activeWindowVideoStats.decoderTimeUs += deltaUs;
+                                activeWindowVideoStats.decoderTimeSamples++;
                                 if (!USE_FRAME_RENDER_TIME) {
-                                    activeWindowVideoStats.totalTimeMs += delta;
+                                    activeWindowVideoStats.totalTimeMs += deltaUs / 1000;
                                 }
                             }
                         } else {
@@ -1556,9 +1559,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     video_format+="???";
                 }
 
-                float decodeTimeMs = lastTwo.totalFramesReceived > 0
-                        ? (float)lastTwo.decoderTimeMs / lastTwo.totalFramesReceived
-                        : 0f;
+                float decodeTimeMs = lastTwo.decoderTimeSamples > 0
+                        ? (float)lastTwo.decoderTimeUs / 1000f / lastTwo.decoderTimeSamples
+                        : -1f;
                 long rttInfo = MoonBridge.getEstimatedRttInfo();
                 long now = SystemClock.uptimeMillis();
                 float audioRateKbps = estimateAudioRateKbps();
@@ -1837,6 +1840,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             activeWindowVideoStats.totalTimeMs += enqueueTimeMs - receiveTimeMs;
         }
 
+        // Stamp the frame in Java's monotonic clock domain before waiting for an input
+        // buffer. This preserves decoder backpressure in the latency measurement without
+        // depending on Moonlight Core's session-relative timestamp epoch.
+        long timestampUs = getMonotonicTimeUs();
         if (!fetchNextInputBuffer()) {
             return MoonBridge.DR_NEED_IDR;
         }
@@ -1860,7 +1867,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             }
         }
 
-        long timestampUs = enqueueTimeMs * 1000;
         if (timestampUs <= lastTimestampUs) {
             // We can't submit multiple buffers with the same timestamp
             // so bump it up by one before queuing
@@ -1950,10 +1956,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     }
 
     public int getAverageDecoderLatency() {
-        if (globalVideoStats.totalFramesReceived == 0) {
+        if (globalVideoStats.decoderTimeSamples == 0) {
             return 0;
         }
-        return (int)(globalVideoStats.decoderTimeMs / globalVideoStats.totalFramesReceived);
+        return (int)(globalVideoStats.decoderTimeUs / 1000 / globalVideoStats.decoderTimeSamples);
+    }
+
+    private static long getMonotonicTimeUs() {
+        return System.nanoTime() / 1000;
     }
 
     private float estimateAudioRateKbps() {
