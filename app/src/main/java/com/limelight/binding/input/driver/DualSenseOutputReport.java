@@ -11,10 +11,17 @@ final class DualSenseOutputReport {
     static final int VALID_FLAG1_INDEX = 2;
     static final int RIGHT_MOTOR_INDEX = 3;
     static final int LEFT_MOTOR_INDEX = 4;
+    static final int HEADPHONE_VOLUME_INDEX = 5;
+    static final int SPEAKER_VOLUME_INDEX = 6;
+    static final int MICROPHONE_VOLUME_INDEX = 7;
+    static final int AUDIO_ROUTE_INDEX = 8;
+    static final int POWER_SAVE_INDEX = 10;
     static final int RIGHT_TRIGGER_TYPE_INDEX = 11;
     static final int RIGHT_TRIGGER_DATA_INDEX = 12;
     static final int LEFT_TRIGGER_TYPE_INDEX = 22;
     static final int LEFT_TRIGGER_DATA_INDEX = 23;
+    static final int TAIL_FIELD0_INDEX = 40;
+    static final int TAIL_FIELD2_INDEX = 42;
     static final int PLAYER_INDICATOR_INDEX = 44;
     static final int LIGHTBAR_RED_INDEX = 45;
     static final int LIGHTBAR_GREEN_INDEX = 46;
@@ -23,11 +30,41 @@ final class DualSenseOutputReport {
     static final byte ENABLE_RUMBLE = 0x03;
     static final byte ENABLE_RIGHT_TRIGGER = 0x04;
     static final byte ENABLE_LEFT_TRIGGER = 0x08;
+    static final byte ENABLE_AUDIO_CONFIGURATION = (byte) 0xF0;
+    static final byte ENABLE_INITIAL_EFFECTS = (byte) 0xF7;
     static final byte ENABLE_LIGHTBAR = 0x04;
     static final byte ENABLE_PLAYER_INDICATOR = 0x10;
     static final byte PLAYER_INDICATOR_MASK = 0x1F;
 
+    static final byte DEFAULT_HEADPHONE_VOLUME = 50;
+    static final byte DEFAULT_SPEAKER_VOLUME = 100;
+    static final byte DEFAULT_MICROPHONE_VOLUME = 100;
+    static final byte INTERNAL_SPEAKER_AUDIO_ROUTE = 0x30;
+
     private DualSenseOutputReport() {
+    }
+
+    /**
+     * Builds the initial USB output report, including the internal-speaker route used by
+     * native controller PCM.
+     *
+     * @return A complete USB DualSense initialization report.
+     */
+    static byte[] initialization() {
+        byte[] report = emptyReport();
+        report[VALID_FLAG0_INDEX] = ENABLE_AUDIO_CONFIGURATION;
+        report[VALID_FLAG1_INDEX] = ENABLE_INITIAL_EFFECTS;
+        report[HEADPHONE_VOLUME_INDEX] = DEFAULT_HEADPHONE_VOLUME;
+        report[SPEAKER_VOLUME_INDEX] = DEFAULT_SPEAKER_VOLUME;
+        report[MICROPHONE_VOLUME_INDEX] = DEFAULT_MICROPHONE_VOLUME;
+        report[AUDIO_ROUTE_INDEX] = INTERNAL_SPEAKER_AUDIO_ROUTE;
+        report[POWER_SAVE_INDEX] = 0x10;
+        report[TAIL_FIELD0_INDEX] = 0x02;
+        report[TAIL_FIELD2_INDEX] = 0x02;
+        report[LIGHTBAR_RED_INDEX] = 0x78;
+        report[LIGHTBAR_GREEN_INDEX] = 0x78;
+        report[LIGHTBAR_BLUE_INDEX] = (byte) 0xEF;
+        return report;
     }
 
     /**

@@ -9,6 +9,26 @@ import static org.junit.Assert.assertEquals;
 
 public class DualSenseOutputReportTest {
     @Test
+    public void initializationEnablesInternalSpeakerAtAudibleVolume() {
+        byte[] report = DualSenseOutputReport.initialization();
+
+        assertEquals(DualSenseOutputReport.REPORT_SIZE, report.length);
+        assertEquals(0x02, report[0]);
+        assertEquals(DualSenseOutputReport.ENABLE_AUDIO_CONFIGURATION,
+                report[DualSenseOutputReport.VALID_FLAG0_INDEX]);
+        assertEquals(DualSenseOutputReport.ENABLE_INITIAL_EFFECTS,
+                report[DualSenseOutputReport.VALID_FLAG1_INDEX]);
+        assertEquals(DualSenseOutputReport.DEFAULT_HEADPHONE_VOLUME,
+                report[DualSenseOutputReport.HEADPHONE_VOLUME_INDEX]);
+        assertEquals(DualSenseOutputReport.DEFAULT_SPEAKER_VOLUME,
+                report[DualSenseOutputReport.SPEAKER_VOLUME_INDEX]);
+        assertEquals(DualSenseOutputReport.DEFAULT_MICROPHONE_VOLUME,
+                report[DualSenseOutputReport.MICROPHONE_VOLUME_INDEX]);
+        assertEquals(DualSenseOutputReport.INTERNAL_SPEAKER_AUDIO_ROUTE,
+                report[DualSenseOutputReport.AUDIO_ROUTE_INDEX]);
+    }
+
+    @Test
     public void rumbleMapsMotorIntensitiesWithoutEnablingOtherOutputs() {
         byte[] report = DualSenseOutputReport.rumble((short) 0xABCD, (short) 0x1234);
 

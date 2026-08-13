@@ -183,7 +183,7 @@ public class DualSenseController extends AbstractDualSenseController {
    @Override
    protected boolean doInit() {
       Log.d("DualController", "doInit");
-      sendCommand(getDualSenseInit());
+      sendCommand(DualSenseOutputReport.initialization());
       return true;
    }
 
@@ -248,41 +248,6 @@ public class DualSenseController extends AbstractDualSenseController {
          invalidateAdvancedAudioHapticsPrime();
       }
    }
-
-   private byte[] getDualSenseInit(){
-      return new byte[] {
-              0x02, // Report ID
-              (byte)(0x10 | 0x20 | 0x40 | 0x80), // valid_flag0
-              (byte)0xf7, // valid_flag1
-              0x00, // right trigger rumble
-              0x00, // left trigger rumble
-              0x00, 0x00, 0x00, 0x00,
-              0x00,  // mute_button_led (0: mute LED off  | 1: mute LED on)
-              0x10, // power_save_control(mute led on  = 0x00, off = 0x10)
-              0x00,          // R2 trigger effect mode 自动步枪
-              0x00, // R2 trigger effect parameter 1 频率10
-              0x00, // R2 trigger effect parameter 2 强度255
-              0x00, // R2 trigger effect parameter 3 起始位置20
-              0x00,       // R2 trigger effect parameter 4
-              0x00,       // R2 trigger effect parameter 5
-              0x00,       // R2 trigger effect parameter 6
-              0x00,       // R2 trigger effect parameter 7
-              0x00, 0x00, 0x00,
-              0x00,       // L2 trigger effect mode 阻尼
-              0x00,       // L2 trigger effect parameter 1 起始位置40
-              0x00, // L2 trigger effect parameter 2 强度230
-              0x00,       // L2 trigger effect parameter 3
-              0x00,       // L2 trigger effect parameter 4
-              0x00,       // L2 trigger effect parameter 5
-              0x00,       // L2 trigger effect parameter 6
-              0x00,       // L2 trigger effect parameter 7
-              0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-              0x02, 0x00, 0x02, 0x00,
-              0x00,       // player leds
-              (byte) 0x78, (byte) 0x78, (byte) 0xEF // RGB values
-      };
-   }
-
 
    //自适应扳机报文
    public static byte[] getTriggerEffectMode(byte[] rM,byte[] lM){
