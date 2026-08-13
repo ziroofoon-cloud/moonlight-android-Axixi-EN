@@ -1,5 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string-array name="gamepad_emulation_names">
+        <item>自动</item>
+        <item>Xbox 360</item>
+        <item>DualShock 4</item>
+        <item>DualSense</item>
+    </string-array>
+    <string-array name="gamepad_emulation_values" translatable="false">
+        <item>auto</item>
+        <item>x360</item>
+        <item>ds4</item>
+        <item>ds5</item>
+    </string-array>
+
     <string-array name="resolution_names">
         <item>@string/resolution_360p</item>
         <item>@string/resolution_480p</item>

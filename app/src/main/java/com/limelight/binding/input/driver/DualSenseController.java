@@ -167,7 +167,7 @@ public class DualSenseController extends AbstractDualSenseController {
       int touch0y = (touch03 << 4) | ((touch02 & 0xF0) >> 4);
       updateTouchpadFinger(0, touch0active, touch0id,
               normalizeTouchCoordinate(touch0x, 1920.0f),
-              normalizeTouchCoordinate(touch0y, 1070.0f));
+              normalizeTouchCoordinate(touch0y, 1080.0f));
 
       boolean touch1active = (touch10 & 0x80) == 0;
       int touch1id = touch10 & 0x7F;
@@ -175,7 +175,7 @@ public class DualSenseController extends AbstractDualSenseController {
       int touch1y = (touch13 << 4) | ((touch12 & 0xF0) >> 4);
       updateTouchpadFinger(1, touch1active, touch1id,
               normalizeTouchCoordinate(touch1x, 1920.0f),
-              normalizeTouchCoordinate(touch1y, 1070.0f));
+              normalizeTouchCoordinate(touch1y, 1080.0f));
       // Return true to send input
       return true;
    }
@@ -211,38 +211,7 @@ public class DualSenseController extends AbstractDualSenseController {
 
    @Override
    public void rumble(short lowFreqMotor, short highFreqMotor) {
-      byte[] reportData = new byte[] {
-              0x02, // Report ID
-              (byte)(0x01|0x02), // valid_flag0
-              (byte)0x00, // valid_flag1
-              (byte)(highFreqMotor>> 8), // right trigger rumble
-              (byte)(lowFreqMotor >> 8), // left trigger rumble
-              0x00, 0x00, 0x00, 0x00,
-              0x00,  // mute_button_led (0: mute LED off  | 1: mute LED on)
-              0x10, // power_save_control(mute led on  = 0x00, off = 0x10)
-              0x00,          // R2 trigger effect mode
-              0x00, // R2 trigger effect parameter 1
-              0x00, // R2 trigger effect parameter 2
-              0x00, // R2 trigger effect parameter 3
-              0x00,       // R2 trigger effect parameter 4
-              0x00,       // R2 trigger effect parameter 5
-              0x00,       // R2 trigger effect parameter 6
-              0x00,       // R2 trigger effect parameter 7
-              0x00, 0x00, 0x00,
-              0x00,       // L2 trigger effect mode
-              0x00,       // L2 trigger effect parameter 1
-              0x00, // L2 trigger effect parameter 2
-              0x00,       // L2 trigger effect parameter 3
-              0x00,       // L2 trigger effect parameter 4
-              0x00,       // L2 trigger effect parameter 5
-              0x00,       // L2 trigger effect parameter 6
-              0x00,       // L2 trigger effect parameter 7
-              0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-              0x02, 0x00, 0x02, 0x00,
-              0x00,       // player leds
-              (byte) 0x78, (byte) 0x78, (byte) 0xEF // RGB values
-      };
-      sendCommand(reportData);
+      sendCommand(DualSenseOutputReport.rumble(lowFreqMotor, highFreqMotor));
    }
 
    @Override
@@ -251,13 +220,29 @@ public class DualSenseController extends AbstractDualSenseController {
    }
 
    @Override
+   public void setAdaptiveTriggerEffects(byte eventFlags, byte typeLeft, byte typeRight,
+                                         byte[] left, byte[] right) {
+      sendCommand(DualSenseOutputReport.adaptiveTriggers(eventFlags, typeLeft, typeRight,
+              left, right));
+   }
+
+   @Override
+   public void setControllerLED(byte red, byte green, byte blue) {
+      sendCommand(DualSenseOutputReport.lightbar(red, green, blue));
+   }
+
+   @Override
+   public void setPlayerIndicator(byte playerIndicator) {
+      sendCommand(DualSenseOutputReport.playerIndicator(playerIndicator));
+   }
+
+   @Override
    public void sendCommand(byte[] data) {
-      Log.d("DualController", "sendCommand");
       updateAdvancedAudioHapticsTriggerCache(data);
       int res = connection.bulkTransfer(outEndpt, data, data.length, 1000);
-      Log.e("DualController", "Command transfer result: " + res);
       if (res != data.length) {
-         Log.d("DualController", "Command set transfer failed: " + res);
+         Log.w("DualController", "Command transfer failed: expected=" + data.length +
+                 " actual=" + res);
       }
       else if (data.length > 0 && data[0] == 0x02) {
          invalidateAdvancedAudioHapticsPrime();
@@ -301,37 +286,7 @@ public class DualSenseController extends AbstractDualSenseController {
 
    //自适应扳机报文
    public static byte[] getTriggerEffectMode(byte[] rM,byte[] lM){
-      return new byte[] {
-              0x02, // Report ID
-              (byte)(0x04|0x08), // valid_flag0
-              (byte)0xf7, // valid_flag1
-              0x00, // right trigger rumble
-              0x00, // left trigger rumble
-              0x00, 0x00, 0x00, 0x00,
-              0x00,  // mute_button_led (0: mute LED off  | 1: mute LED on)
-              0x10, // power_save_control(mute led on  = 0x00, off = 0x10)
-              rM[0],          // R2 trigger effect mode 自动步枪
-              rM[1], // R2 trigger effect parameter 1 频率10
-              rM[2], // R2 trigger effect parameter 2 强度255
-              rM[3], // R2 trigger effect parameter 3 起始位置20
-              0x00,       // R2 trigger effect parameter 4
-              0x00,       // R2 trigger effect parameter 5
-              0x00,       // R2 trigger effect parameter 6
-              0x00,       // R2 trigger effect parameter 7
-              0x00, 0x00, 0x00,
-              lM[0],       // L2 trigger effect mode 阻尼
-              lM[1],       // L2 trigger effect parameter 1 起始位置40
-              lM[2], // L2 trigger effect parameter 2 强度230
-              lM[3],       // L2 trigger effect parameter 3
-              0x00,       // L2 trigger effect parameter 4
-              0x00,       // L2 trigger effect parameter 5
-              0x00,       // L2 trigger effect parameter 6
-              0x00,       // L2 trigger effect parameter 7
-              0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-              0x02, 0x00, 0x02, 0x00,
-              0x00,       // player leds
-              (byte) 0x78, (byte) 0x78, (byte) 0xEF // RGB values
-      };
+      return DualSenseOutputReport.adaptiveTriggersFromLegacy(rM, lM);
    }
 
    /**

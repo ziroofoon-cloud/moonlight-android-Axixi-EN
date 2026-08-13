@@ -1,27 +1,37 @@
 package com.limelight.binding.input.driver;
 
+import android.os.SystemClock;
+import android.util.Log;
+
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.atomic.AtomicLong;
 
 public final class DualSenseHapticSender {
+    private static final String TAG = "DS5Haptics";
     private static final int QUEUE_CAPACITY = 3;
-    private static final int DIRECT_BUFFER_SIZE = 1024;
+    private static final int DIRECT_BUFFER_SIZE = 4096;
+    private static final long STATS_INTERVAL_MS = 2000L;
 
     private static final class HapticFrame {
         final byte[] data;
         final float gain;
+        final boolean nativePcm;
 
-        HapticFrame(byte[] data, float gain) {
+        HapticFrame(byte[] data, float gain, boolean nativePcm) {
             this.data = data;
             this.gain = gain;
+            this.nativePcm = nativePcm;
         }
     }
 
     private final BlockingQueue<HapticFrame> queue = new ArrayBlockingQueue<>(QUEUE_CAPACITY, false);
     private volatile boolean running;
     private Thread worker;
+    private final AtomicLong enqueuedNativePcmFrames = new AtomicLong();
+    private final AtomicLong droppedNativePcmFrames = new AtomicLong();
 
     public synchronized void start() {
         if (running) {
@@ -30,10 +40,16 @@ public final class DualSenseHapticSender {
 
         running = true;
         queue.clear();
+        enqueuedNativePcmFrames.set(0);
+        droppedNativePcmFrames.set(0);
 
         worker = new Thread(() -> {
             ByteBuffer directBuffer = ByteBuffer.allocateDirect(DIRECT_BUFFER_SIZE)
                     .order(ByteOrder.LITTLE_ENDIAN);
+            long statsStartedMs = SystemClock.uptimeMillis();
+            long sentNativePcmFrames = 0;
+            long failedNativePcmFrames = 0;
+            long sentNativePcmBytes = 0;
             while (running) {
                 try {
                     HapticFrame frame = queue.take();
@@ -45,7 +61,33 @@ public final class DualSenseHapticSender {
                     directBuffer.clear();
                     directBuffer.put(frame.data);
                     directBuffer.flip();
-                    HapticNative.nativeSendHapticFeedback(directBuffer, frame.data.length, frame.gain);
+                    if (frame.nativePcm) {
+                        if (HapticNative.nativeSendNativeHapticPcm(directBuffer, frame.data.length)) {
+                            sentNativePcmFrames++;
+                            sentNativePcmBytes += frame.data.length;
+                        }
+                        else {
+                            failedNativePcmFrames++;
+                        }
+
+                        long nowMs = SystemClock.uptimeMillis();
+                        if (nowMs - statsStartedMs >= STATS_INTERVAL_MS) {
+                            long enqueued = enqueuedNativePcmFrames.getAndSet(0);
+                            long dropped = droppedNativePcmFrames.getAndSet(0);
+                            Log.i(TAG, "Native PCM USB stats: queued=" + enqueued +
+                                    " sent=" + sentNativePcmFrames +
+                                    " failed=" + failedNativePcmFrames +
+                                    " dropped=" + dropped +
+                                    " bytes=" + sentNativePcmBytes);
+                            sentNativePcmFrames = 0;
+                            failedNativePcmFrames = 0;
+                            sentNativePcmBytes = 0;
+                            statsStartedMs = nowMs;
+                        }
+                    }
+                    else {
+                        HapticNative.nativeSendHapticFeedback(directBuffer, frame.data.length, frame.gain);
+                    }
                 }
                 catch (InterruptedException ignored) {
                     break;
@@ -73,12 +115,30 @@ public final class DualSenseHapticSender {
             return false;
         }
 
-        HapticFrame hapticFrame = new HapticFrame(frame, intensityGain);
+        return enqueueFrame(new HapticFrame(frame, intensityGain, false));
+    }
+
+    public boolean enqueueNativePcm(byte[] frame) {
+        if (!running || frame == null || frame.length == 0 || frame.length > DIRECT_BUFFER_SIZE) {
+            return false;
+        }
+
+        boolean enqueued = enqueueFrame(new HapticFrame(frame, 1.0f, true));
+        if (enqueued) {
+            enqueuedNativePcmFrames.incrementAndGet();
+        }
+        return enqueued;
+    }
+
+    private boolean enqueueFrame(HapticFrame hapticFrame) {
         if (queue.offer(hapticFrame)) {
             return true;
         }
 
-        queue.poll();
+        HapticFrame droppedFrame = queue.poll();
+        if (droppedFrame != null && droppedFrame.nativePcm) {
+            droppedNativePcmFrames.incrementAndGet();
+        }
         return queue.offer(hapticFrame);
     }
 }

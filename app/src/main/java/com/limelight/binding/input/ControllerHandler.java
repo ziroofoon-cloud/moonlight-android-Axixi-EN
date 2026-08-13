@@ -64,6 +64,12 @@ import java.util.List;
 import java.util.Map;
 
 public class ControllerHandler implements InputManager.InputDeviceListener, UsbDriverListener {
+    private static final long NATIVE_CONTROLLER_PCM_SUPPRESSION_MS = 250L;
+    private static final int NATIVE_CONTROLLER_PCM_SOURCE_RATE = 48000;
+    private static final int OPTIONAL_PCM_HAPTICS_RATE = 3000;
+    private static final int NATIVE_CONTROLLER_PCM_CHANNELS = 4;
+    private static final int NATIVE_CONTROLLER_PCM_DOWNSAMPLE_FACTOR =
+            NATIVE_CONTROLLER_PCM_SOURCE_RATE / OPTIONAL_PCM_HAPTICS_RATE;
     private static final int MAXIMUM_BUMPER_UP_DELAY_MS = 100;
 
     private static final int START_DOWN_TIME_MOUSE_MODE_MS = 750;
@@ -138,6 +144,9 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
     private final HandlerThread backgroundHandlerThread;
     private final Handler backgroundThreadHandler;
     private final PcmHapticsBackend optionalPcmHapticsBackend;
+    private final String gamepadEmulationPreference;
+    private final NativePcmDownsampler[] nativePcmDownsamplers =
+            new NativePcmDownsampler[MAX_GAMEPADS];
     private boolean hasGameController;
     private boolean stopped = false;
     private boolean streamReady;
@@ -150,6 +159,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
     private volatile long nativeGameHapticsOutputTimeMs;
     private volatile String audioHapticsOutputRoute = "";
     private volatile long audioHapticsOutputTimeMs;
+    private volatile long lastNativeControllerPcmTimeMs;
 
     private final PreferenceConfiguration prefConfig;
     private short currentControllers, initialControllers;
@@ -185,6 +195,11 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
     }
 
     private boolean shouldSuppressControllerRumble(AbstractController controller) {
+        if (controller.isAdvancedAudioHapticsActive() &&
+                SystemClock.uptimeMillis() - lastNativeControllerPcmTimeMs <
+                        NATIVE_CONTROLLER_PCM_SUPPRESSION_MS) {
+            return true;
+        }
         return shouldUseControllerAudioHaptics() &&
                 !prefConfig.audioHapticsKeepControllerRumble;
     }
@@ -225,6 +240,14 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
     private boolean isHandledByOptionalPcmHaptics(int vendorId, int productId) {
         return optionalPcmHapticsBackend.isActive()
                 && optionalPcmHapticsBackend.handlesDevice(vendorId, productId);
+    }
+
+    private short addOptionalPcmHapticsCapability(short capabilities,
+                                                   int vendorId, int productId) {
+        if (optionalPcmHapticsBackend.handlesDevice(vendorId, productId)) {
+            return (short) (capabilities | MoonBridge.LI_CCAP_HAPTIC_PCM);
+        }
+        return capabilities;
     }
 
     private static boolean hasRumbleAmplitude(short lowFreqMotor, short highFreqMotor) {
@@ -408,13 +431,16 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             addOutputDevice(outputDevices,
                     optionalPcmHapticsBackend.getActiveDeviceDisplayName());
         }
-        for (int i = 0; i < usbDeviceContexts.size(); i++) {
-            UsbDeviceContext deviceContext = usbDeviceContexts.valueAt(i);
-            if (deviceContext.device.isAdvancedAudioHapticsActive() &&
-                    deviceContext.device.submitAdvancedAudioHapticsFrame(frame, intensityGain)) {
-                submitted = true;
-                addOutputDevice(outputDevices,
-                        getUsbControllerTypeDisplayName(deviceContext.device));
+        if (SystemClock.uptimeMillis() - lastNativeControllerPcmTimeMs >=
+                NATIVE_CONTROLLER_PCM_SUPPRESSION_MS) {
+            for (int i = 0; i < usbDeviceContexts.size(); i++) {
+                UsbDeviceContext deviceContext = usbDeviceContexts.valueAt(i);
+                if (deviceContext.device.isAdvancedAudioHapticsActive() &&
+                        deviceContext.device.submitAdvancedAudioHapticsFrame(frame, intensityGain)) {
+                    submitted = true;
+                    addOutputDevice(outputDevices,
+                            getUsbControllerTypeDisplayName(deviceContext.device));
+                }
             }
         }
 
@@ -482,6 +508,8 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         this.conn = conn;
         this.gestures = gestures;
         this.prefConfig = prefConfig;
+        this.gamepadEmulationPreference = PreferenceConfiguration.normalizeGamepadEmulation(
+                prefConfig.gamepadEmulation);
         this.optionalPcmHapticsBackend = optionalPcmHapticsBackend == null
                 ? NoOpPcmHapticsBackend.INSTANCE : optionalPcmHapticsBackend;
         this.deviceVibrator = (Vibrator) activityContext.getSystemService(Context.VIBRATOR_SERVICE);
@@ -2455,6 +2483,81 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         }
     }
 
+    /**
+     * Converts the UI preference into controller-arrival capability bits.
+     *
+     * @param preference normalized or persisted gamepad emulation preference
+     * @return emulation preference capability bits
+     */
+    public static short getGamepadEmulationCapabilities(String preference) {
+        switch (PreferenceConfiguration.normalizeGamepadEmulation(preference)) {
+            case PreferenceConfiguration.GAMEPAD_EMULATION_X360:
+                return MoonBridge.LI_CCAP_EMULATION_X360;
+            case PreferenceConfiguration.GAMEPAD_EMULATION_DS4:
+                return MoonBridge.LI_CCAP_EMULATION_DS4;
+            case PreferenceConfiguration.GAMEPAD_EMULATION_DS5:
+                return MoonBridge.LI_CCAP_EMULATION_DS5;
+            default:
+                return MoonBridge.LI_CCAP_EMULATION_AUTO;
+        }
+    }
+
+    private short addGamepadEmulationPreference(short capabilities) {
+        return (short) ((capabilities & ~MoonBridge.LI_CCAP_EMULATION_MASK) |
+                getGamepadEmulationCapabilities(gamepadEmulationPreference));
+    }
+
+    /**
+     * Stateful converter for native DualSense USB PCM.
+     *
+     * <p>DualSense composite audio is 48 kHz, four-channel, signed 16-bit PCM. Channels zero and
+     * one drive the speaker while channels two and three drive the voice-coil haptics. This
+     * converter averages each group of sixteen haptic samples to the 3 kHz stereo format consumed
+     * by the optional Kishi native-haptics backend. State is retained across transport windows so
+     * uneven USB packet sizes do not alter playback speed.</p>
+     */
+    static final class NativePcmDownsampler {
+        private int sourceFrames;
+        private int leftSum;
+        private int rightSum;
+
+        byte[] convert(byte[] pcm) {
+            if (pcm == null || pcm.length == 0 || pcm.length % 8 != 0) {
+                return new byte[0];
+            }
+
+            int outputFrames = (sourceFrames + pcm.length / 8) /
+                    NATIVE_CONTROLLER_PCM_DOWNSAMPLE_FACTOR;
+            byte[] output = new byte[outputFrames * 4];
+            int outputOffset = 0;
+            for (int offset = 0; offset < pcm.length; offset += 8) {
+                leftSum += readSigned16LittleEndian(pcm, offset + 4);
+                rightSum += readSigned16LittleEndian(pcm, offset + 6);
+                sourceFrames++;
+                if (sourceFrames == NATIVE_CONTROLLER_PCM_DOWNSAMPLE_FACTOR) {
+                    writeSigned16LittleEndian(output, outputOffset,
+                            leftSum / NATIVE_CONTROLLER_PCM_DOWNSAMPLE_FACTOR);
+                    writeSigned16LittleEndian(output, outputOffset + 2,
+                            rightSum / NATIVE_CONTROLLER_PCM_DOWNSAMPLE_FACTOR);
+                    outputOffset += 4;
+                    sourceFrames = 0;
+                    leftSum = 0;
+                    rightSum = 0;
+                }
+            }
+            return output;
+        }
+
+        private static int readSigned16LittleEndian(byte[] bytes, int offset) {
+            return (short) ((bytes[offset] & 0xFF) | (bytes[offset + 1] << 8));
+        }
+
+        private static void writeSigned16LittleEndian(byte[] bytes, int offset, int sample) {
+            bytes[offset] = (byte) sample;
+            bytes[offset + 1] = (byte) (sample >> 8);
+        }
+    }
+
     private void sendEmulatedMouseMotion(GenericControllerContext context) {
         if (prefConfig.analogStickForScrolling == PreferenceConfiguration.AnalogStickForScrolling.RIGHT) {
             sendEmulatedMouseMove(context.leftStickX, context.leftStickY);
@@ -3154,6 +3257,145 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                 }
             }
         }
+
+        for (int i = 0; i < usbDeviceContexts.size(); i++) {
+            UsbDeviceContext deviceContext = usbDeviceContexts.valueAt(i);
+            if (deviceContext.assignedControllerNumber &&
+                    deviceContext.controllerNumber == controllerNumber) {
+                deviceContext.device.setControllerLED(r, g, b);
+            }
+        }
+    }
+
+    /**
+     * Applies an adaptive-trigger update to the matching app-owned USB controller.
+     *
+     * @param controllerNumber Controller slot receiving the update.
+     * @param eventFlags Bitmask identifying the triggers to update.
+     * @param typeLeft Left trigger effect type.
+     * @param typeRight Right trigger effect type.
+     * @param left Left trigger effect payload.
+     * @param right Right trigger effect payload.
+     */
+    public synchronized void handleSetAdaptiveTriggers(short controllerNumber, byte eventFlags,
+                                                       byte typeLeft, byte typeRight,
+                                                       byte[] left, byte[] right) {
+        if (stopped) {
+            return;
+        }
+
+        for (int i = 0; i < usbDeviceContexts.size(); i++) {
+            UsbDeviceContext deviceContext = usbDeviceContexts.valueAt(i);
+            if (deviceContext.assignedControllerNumber &&
+                    deviceContext.controllerNumber == controllerNumber) {
+                deviceContext.device.setAdaptiveTriggerEffects(eventFlags, typeLeft, typeRight,
+                        left, right);
+            }
+        }
+    }
+
+    /**
+     * Applies a player-indicator update to the matching app-owned USB controller.
+     *
+     * @param controllerNumber Controller slot receiving the update.
+     * @param playerIndicator Native controller LED bitmask.
+     */
+    public synchronized void handleSetPlayerIndicator(short controllerNumber, byte playerIndicator) {
+        if (stopped) {
+            return;
+        }
+
+        for (int i = 0; i < usbDeviceContexts.size(); i++) {
+            UsbDeviceContext deviceContext = usbDeviceContexts.valueAt(i);
+            if (deviceContext.assignedControllerNumber &&
+                    deviceContext.controllerNumber == controllerNumber) {
+                deviceContext.device.setPlayerIndicator(playerIndicator);
+            }
+        }
+    }
+
+    /**
+     * Routes authored four-channel DualSense PCM to the matching app-owned USB controller.
+     *
+     * @param controllerNumber Controller slot receiving the PCM.
+     * @param sampleRate PCM sample rate in Hz.
+     * @param channels Interleaved channel count.
+     * @param bitsPerSample Bits stored for each sample.
+     * @param pcm Interleaved little-endian PCM bytes.
+     * @return true when a matching controller accepted the frame.
+     */
+    public synchronized boolean handleControllerNativePcm(short controllerNumber, int sampleRate,
+                                                          byte channels, byte bitsPerSample,
+                                                          byte[] pcm) {
+        if (stopped || sampleRate != NATIVE_CONTROLLER_PCM_SOURCE_RATE ||
+                (channels & 0xFF) != NATIVE_CONTROLLER_PCM_CHANNELS ||
+                (bitsPerSample & 0xFF) != 16 || pcm == null || pcm.length == 0 ||
+                pcm.length > 3920 || pcm.length % 8 != 0) {
+            return false;
+        }
+
+        boolean submitted = false;
+        List<String> outputDevices = new ArrayList<>();
+
+        boolean optionalPcmTarget = false;
+        for (int i = 0; i < inputDeviceContexts.size(); i++) {
+            InputDeviceContext deviceContext = inputDeviceContexts.valueAt(i);
+            if (deviceContext.assignedControllerNumber &&
+                    deviceContext.controllerNumber == controllerNumber &&
+                    optionalPcmHapticsBackend.handlesDevice(
+                            deviceContext.vendorId, deviceContext.productId)) {
+                optionalPcmTarget = true;
+                break;
+            }
+        }
+        if (!optionalPcmTarget) {
+            for (int i = 0; i < usbDeviceContexts.size(); i++) {
+                UsbDeviceContext deviceContext = usbDeviceContexts.valueAt(i);
+                if (deviceContext.assignedControllerNumber &&
+                        deviceContext.controllerNumber == controllerNumber &&
+                        optionalPcmHapticsBackend.handlesDevice(
+                                deviceContext.device.getVendorId(),
+                                deviceContext.device.getProductId())) {
+                    optionalPcmTarget = true;
+                    break;
+                }
+            }
+        }
+        if (optionalPcmTarget && optionalPcmHapticsBackend.isActive()) {
+            int index = controllerNumber & 0xFFFF;
+            if (index < nativePcmDownsamplers.length) {
+                NativePcmDownsampler downsampler = nativePcmDownsamplers[index];
+                if (downsampler == null) {
+                    downsampler = new NativePcmDownsampler();
+                    nativePcmDownsamplers[index] = downsampler;
+                }
+                byte[] hapticPcm = downsampler.convert(pcm);
+                if (hapticPcm.length > 0 && optionalPcmHapticsBackend.submitPcm(
+                        hapticPcm, OPTIONAL_PCM_HAPTICS_RATE, 2, 1.0f)) {
+                    submitted = true;
+                    addOutputDevice(outputDevices,
+                            optionalPcmHapticsBackend.getActiveDeviceDisplayName());
+                }
+            }
+        }
+
+        for (int i = 0; i < usbDeviceContexts.size(); i++) {
+            UsbDeviceContext deviceContext = usbDeviceContexts.valueAt(i);
+            if (deviceContext.assignedControllerNumber &&
+                    deviceContext.controllerNumber == controllerNumber &&
+                    deviceContext.device.hasAdvancedAudioHapticsSupport() &&
+                    deviceContext.device.submitNativeAudioHapticsFrame(pcm)) {
+                submitted = true;
+                addOutputDevice(outputDevices,
+                        getUsbControllerTypeDisplayName(deviceContext.device));
+            }
+        }
+
+        if (submitted) {
+            lastNativeControllerPcmTimeMs = SystemClock.uptimeMillis();
+            markAudioHapticsOutput("原生PCM", outputDevices);
+        }
+        return submitted;
     }
 
     public synchronized boolean handleButtonUp(KeyEvent event) {
@@ -4162,8 +4404,10 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                 }
             }
 
+            capabilities = addOptionalPcmHapticsCapability(
+                    capabilities, inputDevice.getVendorId(), inputDevice.getProductId());
             conn.sendControllerArrivalEvent((byte)controllerNumber, getActiveControllerMask(),
-                    reportedType, supportedButtonFlags, capabilities);
+                    reportedType, supportedButtonFlags, addGamepadEmulationPreference(capabilities));
 
             // After reporting arrival to the host, send initial battery state and begin monitoring
             //是否上报电池状态
@@ -4248,8 +4492,11 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
 
         @Override
         public void sendControllerArrival() {
+            short capabilities = addOptionalPcmHapticsCapability(device.getCapabilities(),
+                    device.getVendorId(), device.getProductId());
             conn.sendControllerArrivalEvent((byte)controllerNumber, getActiveControllerMask(),
-                    device.getType(), device.getSupportedButtonFlags(), device.getCapabilities());
+                    device.getType(), device.getSupportedButtonFlags(),
+                    addGamepadEmulationPreference(capabilities));
         }
     }
 

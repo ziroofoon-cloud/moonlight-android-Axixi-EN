@@ -318,6 +318,13 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     private boolean fsrViewLifecyclePaused;
     private boolean activityResumed;
     private volatile boolean streamSessionBackgrounded;
+    private static final long NATIVE_CONTROLLER_PCM_STATS_INTERVAL_MS = 2000L;
+    private long nativeControllerPcmStatsStartedMs;
+    private long nativeControllerPcmFrames;
+    private long nativeControllerPcmBytes;
+    private long nativeControllerPcmSequenceGaps;
+    private int nativeControllerPcmLastSequence = -1;
+    private final int[] nativeControllerPcmPeaks = new int[4];
     private boolean restoreInputGrabAfterBackground;
     private boolean restartMicAfterBackground;
     private PowerManager.WakeLock backgroundStreamWakeLock;
@@ -3567,6 +3574,98 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     @Override
     public void setControllerLED(short controllerNumber, byte r, byte g, byte b) {
         controllerHandler.handleSetControllerLED(controllerNumber, r, g, b);
+    }
+
+    @Override
+    public void setAdaptiveTriggers(short controllerNumber, byte eventFlags,
+                                    byte typeLeft, byte typeRight,
+                                    byte[] left, byte[] right) {
+        if (streamSessionBackgrounded) {
+            return;
+        }
+        LimeLog.info(String.format((Locale)null,
+                "Adaptive triggers on gamepad %d: flags=%02x left=%02x right=%02x",
+                controllerNumber, eventFlags, typeLeft, typeRight));
+        controllerHandler.handleSetAdaptiveTriggers(controllerNumber, eventFlags,
+                typeLeft, typeRight, left, right);
+    }
+
+    @Override
+    public void setPlayerIndicator(short controllerNumber, byte playerIndicator) {
+        LimeLog.info(String.format((Locale)null,
+                "Player indicator on gamepad %d: %02x", controllerNumber, playerIndicator));
+        controllerHandler.handleSetPlayerIndicator(controllerNumber, playerIndicator);
+    }
+
+    @Override
+    public void controllerPcm(short controllerNumber, short sequence, int sampleRate,
+                              byte channels, byte bitsPerSample, byte[] pcm) {
+        if (streamSessionBackgrounded) {
+            return;
+        }
+        if (controllerHandler.handleControllerNativePcm(controllerNumber, sampleRate,
+                channels, bitsPerSample, pcm)) {
+            recordNativeControllerPcmStats(controllerNumber, sequence, sampleRate,
+                    channels, bitsPerSample, pcm);
+        }
+    }
+
+    /**
+     * Records low-rate transport and channel-level diagnostics for native controller PCM.
+     *
+     * @param controllerNumber Controller slot receiving the PCM.
+     * @param sequence Rolling unsigned 16-bit window sequence.
+     * @param sampleRate PCM sample rate in Hz.
+     * @param channels Interleaved channel count.
+     * @param bitsPerSample Bits stored for each sample.
+     * @param pcm Interleaved little-endian PCM bytes.
+     */
+    private void recordNativeControllerPcmStats(short controllerNumber, short sequence,
+                                                int sampleRate, byte channels,
+                                                byte bitsPerSample, byte[] pcm) {
+        int unsignedSequence = sequence & 0xFFFF;
+        if (nativeControllerPcmLastSequence >= 0) {
+            int expectedSequence = (nativeControllerPcmLastSequence + 1) & 0xFFFF;
+            nativeControllerPcmSequenceGaps += (unsignedSequence - expectedSequence) & 0xFFFF;
+        }
+        nativeControllerPcmLastSequence = unsignedSequence;
+        nativeControllerPcmFrames++;
+        nativeControllerPcmBytes += pcm != null ? pcm.length : 0;
+
+        if ((channels & 0xFF) == 4 && (bitsPerSample & 0xFF) == 16 && pcm != null) {
+            for (int offset = 0; offset + 8 <= pcm.length; offset += 8) {
+                for (int channel = 0; channel < 4; channel++) {
+                    int sampleOffset = offset + channel * 2;
+                    int sample = (short) ((pcm[sampleOffset] & 0xFF) |
+                            (pcm[sampleOffset + 1] << 8));
+                    nativeControllerPcmPeaks[channel] = Math.max(
+                            nativeControllerPcmPeaks[channel], Math.abs(sample));
+                }
+            }
+        }
+
+        long nowMs = SystemClock.uptimeMillis();
+        if (nativeControllerPcmStatsStartedMs == 0L) {
+            nativeControllerPcmStatsStartedMs = nowMs;
+            LimeLog.info(String.format((Locale)null,
+                    "Native controller PCM started on gamepad %d: %d Hz %dch %dbit bytes=%d",
+                    controllerNumber, sampleRate, channels & 0xFF, bitsPerSample & 0xFF,
+                    pcm != null ? pcm.length : 0));
+        }
+        else if (nowMs - nativeControllerPcmStatsStartedMs >=
+                NATIVE_CONTROLLER_PCM_STATS_INTERVAL_MS) {
+            LimeLog.info(String.format((Locale)null,
+                    "Native controller PCM stats gamepad %d: windows=%d bytes=%d seq=%d gaps=%d peak=[%d,%d,%d,%d]",
+                    controllerNumber, nativeControllerPcmFrames, nativeControllerPcmBytes,
+                    unsignedSequence, nativeControllerPcmSequenceGaps,
+                    nativeControllerPcmPeaks[0], nativeControllerPcmPeaks[1],
+                    nativeControllerPcmPeaks[2], nativeControllerPcmPeaks[3]));
+            nativeControllerPcmStatsStartedMs = nowMs;
+            nativeControllerPcmFrames = 0;
+            nativeControllerPcmBytes = 0;
+            nativeControllerPcmSequenceGaps = 0;
+            java.util.Arrays.fill(nativeControllerPcmPeaks, 0);
+        }
     }
 
     @Override

@@ -111,6 +111,13 @@ public class MoonBridge {
     public static final short LI_CCAP_GYRO            = 0x20;
     public static final short LI_CCAP_BATTERY_STATE   = 0x40;
     public static final short LI_CCAP_RGB_LED         = 0x80;
+    public static final short LI_CCAP_DUAL_TOUCHPAD   = 0x100;
+    public static final short LI_CCAP_HAPTIC_PCM      = 0x200;
+    public static final short LI_CCAP_EMULATION_MASK  = 0xC00;
+    public static final short LI_CCAP_EMULATION_AUTO  = 0x000;
+    public static final short LI_CCAP_EMULATION_X360  = 0x400;
+    public static final short LI_CCAP_EMULATION_DS4   = 0x800;
+    public static final short LI_CCAP_EMULATION_DS5   = 0xC00;
 
     public static final byte LI_MOTION_TYPE_ACCEL = 0x01;
     public static final byte LI_MOTION_TYPE_GYRO  = 0x02;
@@ -325,6 +332,30 @@ public class MoonBridge {
     public static void bridgeClSetControllerLED(short controllerNumber, byte r, byte g, byte b) {
         if (connectionListener != null) {
             connectionListener.setControllerLED(controllerNumber, r, g, b);
+        }
+    }
+
+    public static void bridgeClSetAdaptiveTriggers(short controllerNumber, byte eventFlags,
+                                                   byte typeLeft, byte typeRight,
+                                                   byte[] left, byte[] right) {
+        if (connectionListener != null) {
+            connectionListener.setAdaptiveTriggers(controllerNumber, eventFlags,
+                    typeLeft, typeRight, left, right);
+        }
+    }
+
+    public static void bridgeClSetPlayerIndicator(short controllerNumber, byte playerIndicator) {
+        if (connectionListener != null) {
+            connectionListener.setPlayerIndicator(controllerNumber, playerIndicator);
+        }
+    }
+
+    public static void bridgeClControllerPcm(short controllerNumber, short sequence,
+                                             int sampleRate, byte channels,
+                                             byte bitsPerSample, byte[] pcm) {
+        if (connectionListener != null) {
+            connectionListener.controllerPcm(controllerNumber, sequence, sampleRate,
+                    channels, bitsPerSample, pcm);
         }
     }
 

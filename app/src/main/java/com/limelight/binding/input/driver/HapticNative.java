@@ -17,5 +17,7 @@ public final class HapticNative {
 
     public static native boolean nativeSendHapticFeedback(ByteBuffer buffer, int length, float intensityGain);
 
+    public static native boolean nativeSendNativeHapticPcm(ByteBuffer buffer, int length);
+
     public static native void nativeCleanupHaptics();
 }

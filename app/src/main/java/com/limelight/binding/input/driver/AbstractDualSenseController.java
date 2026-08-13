@@ -21,12 +21,13 @@ public abstract class AbstractDualSenseController extends AbstractController {
     private static final int HAPTIC_AUDIO_ENDPOINT_PACKET_SIZE = 0x188;
     private static final int HAPTIC_INIT_REPORT_SIZE = 48;
     private static final int HAPTIC_INIT_TIMEOUT_MS = 1000;
-    private static final int REPORT_MIN_TRIGGER_LEN = 31;
     private static final int REPORT_RIGHT_TRIGGER_TYPE_IDX = 11;
     private static final int REPORT_RIGHT_TRIGGER_DATA_IDX = 12;
     private static final int REPORT_LEFT_TRIGGER_TYPE_IDX = 22;
     private static final int REPORT_LEFT_TRIGGER_DATA_IDX = 23;
     private static final int TRIGGER_DATA_LEN = 10;
+    private static final int REPORT_MIN_TRIGGER_LEN =
+            REPORT_LEFT_TRIGGER_DATA_IDX + TRIGGER_DATA_LEN;
     private static final int TOUCHPAD_FINGER_COUNT = 2;
 
     protected final UsbDevice device;
@@ -56,7 +57,8 @@ public abstract class AbstractDualSenseController extends AbstractController {
         this.connection = connection;
         this.type = MoonBridge.LI_CTYPE_PS;
         this.capabilities = MoonBridge.LI_CCAP_GYRO | MoonBridge.LI_CCAP_ACCEL |
-                MoonBridge.LI_CCAP_RUMBLE | MoonBridge.LI_CCAP_TOUCHPAD;
+                MoonBridge.LI_CCAP_RUMBLE | MoonBridge.LI_CCAP_TOUCHPAD |
+                MoonBridge.LI_CCAP_RGB_LED;
         this.supportedButtonFlags =
                 ControllerPacket.A_FLAG | ControllerPacket.B_FLAG | ControllerPacket.X_FLAG | ControllerPacket.Y_FLAG |
                         ControllerPacket.UP_FLAG | ControllerPacket.DOWN_FLAG | ControllerPacket.LEFT_FLAG | ControllerPacket.RIGHT_FLAG |
@@ -190,6 +192,9 @@ public abstract class AbstractDualSenseController extends AbstractController {
         }
         Log.d("DualSenseController", "getInterfaceCount:" + device.getInterfaceCount());
         detectHapticEndpoint();
+        if (hasAdvancedAudioHapticsSupport()) {
+            capabilities |= MoonBridge.LI_CCAP_HAPTIC_PCM;
+        }
 
         // Find the endpoints
         UsbInterface iface = findInterface(device);
@@ -337,6 +342,20 @@ public abstract class AbstractDualSenseController extends AbstractController {
                 advancedAudioHapticsSender.enqueue(frame, clampAdvancedAudioHapticsGain(intensityGain));
     }
 
+    @Override
+    public boolean submitNativeAudioHapticsFrame(byte[] frame) {
+        if (frame == null || frame.length == 0 || frame.length > 3920 || frame.length % 8 != 0) {
+            return false;
+        }
+        if (!isAdvancedAudioHapticsActive() && !startAdvancedAudioHaptics()) {
+            return false;
+        }
+        if (!advancedAudioHapticsPrimed && !tryPrimeAdvancedAudioHaptics()) {
+            return false;
+        }
+        return advancedAudioHapticsSender != null && advancedAudioHapticsSender.enqueueNativePcm(frame);
+    }
+
     public int getAdvancedAudioHapticsInterfaceId() {
         return hapticIface != null ? hapticIface.getId() : -1;
     }
@@ -360,12 +379,17 @@ public abstract class AbstractDualSenseController extends AbstractController {
             return;
         }
 
-        cachedRightTriggerType = report[REPORT_RIGHT_TRIGGER_TYPE_IDX];
-        System.arraycopy(report, REPORT_RIGHT_TRIGGER_DATA_IDX,
-                cachedRightTriggerData, 0, TRIGGER_DATA_LEN);
-        cachedLeftTriggerType = report[REPORT_LEFT_TRIGGER_TYPE_IDX];
-        System.arraycopy(report, REPORT_LEFT_TRIGGER_DATA_IDX,
-                cachedLeftTriggerData, 0, TRIGGER_DATA_LEN);
+        int validFlags = report[1] & 0xFF;
+        if ((validFlags & DualSenseOutputReport.ENABLE_RIGHT_TRIGGER) != 0) {
+            cachedRightTriggerType = report[REPORT_RIGHT_TRIGGER_TYPE_IDX];
+            System.arraycopy(report, REPORT_RIGHT_TRIGGER_DATA_IDX,
+                    cachedRightTriggerData, 0, TRIGGER_DATA_LEN);
+        }
+        if ((validFlags & DualSenseOutputReport.ENABLE_LEFT_TRIGGER) != 0) {
+            cachedLeftTriggerType = report[REPORT_LEFT_TRIGGER_TYPE_IDX];
+            System.arraycopy(report, REPORT_LEFT_TRIGGER_DATA_IDX,
+                    cachedLeftTriggerData, 0, TRIGGER_DATA_LEN);
+        }
     }
 
     private boolean tryPrimeAdvancedAudioHaptics() {

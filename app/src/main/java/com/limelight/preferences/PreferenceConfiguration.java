@@ -65,6 +65,20 @@ public class PreferenceConfiguration {
         }
         return STEREO_3D_MODE_OFF;
     }
+
+    /**
+     * Returns a supported host virtual gamepad preference.
+     *
+     * @param value persisted preference value
+     * @return normalized preference value
+     */
+    public static String normalizeGamepadEmulation(String value) {
+        if (GAMEPAD_EMULATION_X360.equals(value) || GAMEPAD_EMULATION_DS4.equals(value) ||
+                GAMEPAD_EMULATION_DS5.equals(value)) {
+            return value;
+        }
+        return GAMEPAD_EMULATION_AUTO;
+    }
     private static final String STRETCH_PREF_STRING = "checkbox_stretch_video";
     private static final String SOPS_PREF_STRING = "checkbox_enable_sops";
     private static final String DISABLE_TOASTS_PREF_STRING = "checkbox_disable_warnings";
@@ -111,6 +125,11 @@ public class PreferenceConfiguration {
     private static final String GAMEPAD_TOUCHPAD_AS_MOUSE_PREF_STRING = "checkbox_gamepad_touchpad_as_mouse";
     private static final String GAMEPAD_MOTION_SENSORS_PREF_STRING = "checkbox_gamepad_motion_sensors";
     private static final String GAMEPAD_MOTION_FALLBACK_PREF_STRING = "checkbox_gamepad_motion_fallback";
+    public static final String GAMEPAD_EMULATION_PREF_STRING = "list_gamepad_emulation";
+    public static final String GAMEPAD_EMULATION_AUTO = "auto";
+    public static final String GAMEPAD_EMULATION_X360 = "x360";
+    public static final String GAMEPAD_EMULATION_DS4 = "ds4";
+    public static final String GAMEPAD_EMULATION_DS5 = "ds5";
     public static final String KEEP_VIDEO_ZOOM_ON_DISABLE_PREF_STRING = "checkbox_keep_video_zoom_on_disable";
     public static final String KEYBOARD_ESC_OPENS_GAME_MENU_PREF_STRING = "checkbox_keyboard_esc_opens_game_menu";
 
@@ -319,6 +338,7 @@ public class PreferenceConfiguration {
     public boolean gamepadMotionSensors;
     public boolean gamepadTouchpadAsMouse;
     public boolean gamepadMotionSensorsFallbackToDevice;
+    public String gamepadEmulation;
 
     //开启虚拟手柄的陀螺仪功能
     public boolean enableVirtualControllerMotion;
@@ -1075,6 +1095,8 @@ public class PreferenceConfiguration {
         config.gamepadTouchpadAsMouse = prefs.getBoolean(GAMEPAD_TOUCHPAD_AS_MOUSE_PREF_STRING, DEFAULT_GAMEPAD_TOUCHPAD_AS_MOUSE);
         config.gamepadMotionSensors = prefs.getBoolean(GAMEPAD_MOTION_SENSORS_PREF_STRING, DEFAULT_GAMEPAD_MOTION_SENSORS);
         config.gamepadMotionSensorsFallbackToDevice = prefs.getBoolean(GAMEPAD_MOTION_FALLBACK_PREF_STRING, DEFAULT_GAMEPAD_MOTION_FALLBACK);
+        config.gamepadEmulation = normalizeGamepadEmulation(prefs.getString(
+                GAMEPAD_EMULATION_PREF_STRING, GAMEPAD_EMULATION_AUTO));
 
         config.performanceOverlayLiteMaginTop=prefs.getInt("performance_overlayLite_magin_top",4);
 

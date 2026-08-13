@@ -80,6 +80,37 @@ public abstract class AbstractController {
 
     public abstract void rumbleTriggers(short leftTrigger, short rightTrigger);
 
+    /**
+     * Applies native adaptive-trigger effects when supported by this controller.
+     *
+     * @param eventFlags Bitmask identifying the triggers to update.
+     * @param typeLeft Left trigger effect type.
+     * @param typeRight Right trigger effect type.
+     * @param left Left trigger effect payload.
+     * @param right Right trigger effect payload.
+     */
+    public void setAdaptiveTriggerEffects(byte eventFlags, byte typeLeft, byte typeRight,
+                                          byte[] left, byte[] right) {
+    }
+
+    /**
+     * Sets the controller RGB LED when supported.
+     *
+     * @param red Red component.
+     * @param green Green component.
+     * @param blue Blue component.
+     */
+    public void setControllerLED(byte red, byte green, byte blue) {
+    }
+
+    /**
+     * Sets the controller player indicator LEDs when supported.
+     *
+     * @param playerIndicator Native controller LED bitmask.
+     */
+    public void setPlayerIndicator(byte playerIndicator) {
+    }
+
     public boolean hasAdvancedAudioHapticsSupport() {
         return false;
     }
@@ -96,6 +127,16 @@ public abstract class AbstractController {
     }
 
     public boolean submitAdvancedAudioHapticsFrame(byte[] frame, float intensityGain) {
+        return false;
+    }
+
+    /**
+     * Submits authored controller PCM without resampling or channel remapping.
+     *
+     * @param frame Interleaved four-channel, 48 kHz, signed 16-bit little-endian PCM.
+     * @return true when queued for the controller USB audio endpoint.
+     */
+    public boolean submitNativeAudioHapticsFrame(byte[] frame) {
         return false;
     }
 

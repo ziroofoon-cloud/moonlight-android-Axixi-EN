@@ -20,7 +20,8 @@
 #define BYTES_PER_INPUT_FRAME (INPUT_CHANNELS * (int)sizeof(int16_t))
 #define ISO_PACKET_COUNT 10
 #define ISO_PACKET_SIZE 392
-#define MAX_OUTPUT_BYTES 4096
+#define MAX_OUTPUT_BYTES (ISO_PACKET_COUNT * ISO_PACKET_SIZE)
+#define BYTES_PER_OUTPUT_FRAME (OUTPUT_CHANNELS * (int)sizeof(int16_t))
 
 static pthread_mutex_t g_haptic_mutex = PTHREAD_MUTEX_INITIALIZER;
 
@@ -104,6 +105,88 @@ static void linear_upsample_3k_to_48k(const int16_t* input_quad, int input_frame
     }
 }
 
+static int submit_iso_pcm_locked(void* buffer, int length) {
+    int frames;
+    int packet_count;
+    int base_frames;
+    int extra_frames;
+    int i;
+    int success;
+    size_t urb_size;
+    struct usbdevfs_urb* urb;
+    void* reaped_urb = NULL;
+
+    if (buffer == NULL || length <= 0 || length > MAX_OUTPUT_BYTES ||
+            length % BYTES_PER_OUTPUT_FRAME != 0) {
+        return 0;
+    }
+
+    frames = length / BYTES_PER_OUTPUT_FRAME;
+    packet_count = (frames + 48) / 49;
+    if (packet_count <= 0 || packet_count > ISO_PACKET_COUNT) {
+        return 0;
+    }
+
+    urb_size = sizeof(struct usbdevfs_urb) +
+            ((size_t) packet_count * sizeof(struct usbdevfs_iso_packet_desc));
+    urb = (struct usbdevfs_urb*) calloc(1, urb_size);
+    if (urb == NULL) {
+        HLOGE("Failed to allocate haptic URB");
+        return 0;
+    }
+
+    urb->type = USBDEVFS_URB_TYPE_ISO;
+    urb->endpoint = g_haptic_endpoint;
+    urb->flags = USBDEVFS_URB_ISO_ASAP;
+    urb->buffer = buffer;
+    urb->buffer_length = length;
+    urb->number_of_packets = packet_count;
+
+    base_frames = frames / packet_count;
+    extra_frames = frames % packet_count;
+    for (i = 0; i < packet_count; i++) {
+        int packet_frames = base_frames + (i < extra_frames ? 1 : 0);
+        urb->iso_frame_desc[i].length = packet_frames * BYTES_PER_OUTPUT_FRAME;
+    }
+
+    if (ioctl(g_usb_fd, USBDEVFS_SUBMITURB, urb) != 0) {
+        HLOGE("Failed to submit haptic URB, errno=%d", errno);
+        free(urb);
+        return 0;
+    }
+    if (ioctl(g_usb_fd, USBDEVFS_REAPURB, &reaped_urb) != 0) {
+        HLOGE("Failed to reap haptic URB, errno=%d", errno);
+        free(urb);
+        return 0;
+    }
+    if (reaped_urb != urb) {
+        HLOGE("Reaped unexpected haptic URB");
+        free(reaped_urb);
+        free(urb);
+        return 0;
+    }
+
+    success = urb->status == 0;
+    if (!success) {
+        HLOGE("Haptic URB completed with status=%d", urb->status);
+    }
+    else {
+        for (i = 0; i < packet_count; i++) {
+            if (urb->iso_frame_desc[i].status != 0 ||
+                    urb->iso_frame_desc[i].actual_length != urb->iso_frame_desc[i].length) {
+                HLOGE("Haptic isoch packet %d failed: status=%u actual=%u expected=%u",
+                      i, urb->iso_frame_desc[i].status,
+                      urb->iso_frame_desc[i].actual_length,
+                      urb->iso_frame_desc[i].length);
+                success = 0;
+                break;
+            }
+        }
+    }
+    free(urb);
+    return success;
+}
+
 JNIEXPORT jboolean JNICALL
 Java_com_limelight_binding_input_driver_HapticNative_nativeConnectHaptics(
         JNIEnv* env, jclass clazz, jint fd, jint ifaceId, jint altSetting, jbyte epAddr) {
@@ -174,11 +257,7 @@ Java_com_limelight_binding_input_driver_HapticNative_nativeSendHapticFeedback(
     int upsampled_frames;
     int output_samples;
     int output_bytes;
-    size_t urb_size;
-    struct usbdevfs_urb* urb;
-    int remaining;
-    int i;
-    void* reaped_urb = NULL;
+    int success;
 
     (void) clazz;
 
@@ -222,49 +301,36 @@ Java_com_limelight_binding_input_driver_HapticNative_nativeSendHapticFeedback(
     linear_upsample_3k_to_48k(quad, input_frames, g_upsampled_buffer);
     free(quad);
 
-    urb_size = sizeof(struct usbdevfs_urb) + ((size_t) ISO_PACKET_COUNT * sizeof(struct usbdevfs_iso_packet_desc));
-    urb = (struct usbdevfs_urb*) calloc(1, urb_size);
-    if (urb == NULL) {
-        HLOGE("Failed to allocate URB");
-        pthread_mutex_unlock(&g_haptic_mutex);
-        return JNI_FALSE;
-    }
-
-    urb->type = USBDEVFS_URB_TYPE_ISO;
-    urb->endpoint = g_haptic_endpoint;
-    urb->flags = USBDEVFS_URB_ISO_ASAP;
-    urb->buffer = g_upsampled_buffer;
-    urb->buffer_length = output_bytes;
-    urb->number_of_packets = ISO_PACKET_COUNT;
-
-    remaining = output_bytes;
-    for (i = 0; i < ISO_PACKET_COUNT; i++) {
-        const int chunk = (remaining >= ISO_PACKET_SIZE) ? ISO_PACKET_SIZE : remaining;
-        urb->iso_frame_desc[i].length = (chunk > 0) ? chunk : 0;
-        remaining -= chunk;
-    }
-
-    if (ioctl(g_usb_fd, USBDEVFS_SUBMITURB, urb) != 0) {
-        HLOGE("Failed to submit URB, errno=%d", errno);
-        free(urb);
-        pthread_mutex_unlock(&g_haptic_mutex);
-        return JNI_FALSE;
-    }
-
-    if (ioctl(g_usb_fd, USBDEVFS_REAPURB, &reaped_urb) != 0) {
-        HLOGE("Failed to reap URB, errno=%d", errno);
-        free(urb);
-        pthread_mutex_unlock(&g_haptic_mutex);
-        return JNI_FALSE;
-    }
-
-    if (reaped_urb != NULL && reaped_urb != urb) {
-        free(reaped_urb);
-    }
-
-    free(urb);
+    success = submit_iso_pcm_locked(g_upsampled_buffer, output_bytes);
     pthread_mutex_unlock(&g_haptic_mutex);
-    return JNI_TRUE;
+    return success ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_limelight_binding_input_driver_HapticNative_nativeSendNativeHapticPcm(
+        JNIEnv* env, jclass clazz, jobject buffer, jint length) {
+    void* pcm;
+    jlong capacity;
+    int success;
+    (void) clazz;
+
+    pthread_mutex_lock(&g_haptic_mutex);
+    if (g_usb_fd < 0 || !g_haptic_enabled || buffer == NULL) {
+        pthread_mutex_unlock(&g_haptic_mutex);
+        return JNI_FALSE;
+    }
+
+    pcm = (*env)->GetDirectBufferAddress(env, buffer);
+    capacity = (*env)->GetDirectBufferCapacity(env, buffer);
+    if (pcm == NULL || length <= 0 || length > capacity ||
+            length > MAX_OUTPUT_BYTES || length % BYTES_PER_OUTPUT_FRAME != 0) {
+        pthread_mutex_unlock(&g_haptic_mutex);
+        return JNI_FALSE;
+    }
+
+    success = submit_iso_pcm_locked(pcm, length);
+    pthread_mutex_unlock(&g_haptic_mutex);
+    return success ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL

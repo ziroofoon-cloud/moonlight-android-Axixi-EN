@@ -38,6 +38,9 @@ static jmethodID BridgeClSetHdrModeMethod;
 static jmethodID BridgeClRumbleTriggersMethod;
 static jmethodID BridgeClSetMotionEventStateMethod;
 static jmethodID BridgeClSetControllerLEDMethod;
+static jmethodID BridgeClSetAdaptiveTriggersMethod;
+static jmethodID BridgeClSetPlayerIndicatorMethod;
+static jmethodID BridgeClControllerPcmMethod;
 static jbyteArray DecodedFrameBuffer;
 static jshortArray DecodedAudioBuffer;
 
@@ -102,6 +105,9 @@ Java_com_limelight_nvstream_jni_MoonBridge_init(JNIEnv *env, jclass clazz) {
     BridgeClRumbleTriggersMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClRumbleTriggers", "(SSS)V");
     BridgeClSetMotionEventStateMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClSetMotionEventState", "(SBS)V");
     BridgeClSetControllerLEDMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClSetControllerLED", "(SBBB)V");
+    BridgeClSetAdaptiveTriggersMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClSetAdaptiveTriggers", "(SBBB[B[B)V");
+    BridgeClSetPlayerIndicatorMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClSetPlayerIndicator", "(SB)V");
+    BridgeClControllerPcmMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeClControllerPcm", "(SSIBB[B)V");
 }
 
 int BridgeDrSetup(int videoFormat, int width, int height, int redrawRate, void* context, int drFlags) {
@@ -391,6 +397,65 @@ void BridgeClSetControllerLED(uint16_t controllerNumber, uint8_t r, uint8_t g, u
     }
 }
 
+void BridgeClSetAdaptiveTriggers(uint16_t controllerNumber, uint8_t eventFlags,
+                                 uint8_t typeLeft, uint8_t typeRight,
+                                 uint8_t *left, uint8_t *right) {
+    JNIEnv* env = GetThreadEnv();
+    jbyteArray leftPayload = (*env)->NewByteArray(env, DS_EFFECT_PAYLOAD_SIZE);
+    if (leftPayload == NULL) {
+        return;
+    }
+
+    jbyteArray rightPayload = (*env)->NewByteArray(env, DS_EFFECT_PAYLOAD_SIZE);
+    if (rightPayload == NULL) {
+        (*env)->DeleteLocalRef(env, leftPayload);
+        return;
+    }
+
+    (*env)->SetByteArrayRegion(env, leftPayload, 0, DS_EFFECT_PAYLOAD_SIZE, (const jbyte*)left);
+    (*env)->SetByteArrayRegion(env, rightPayload, 0, DS_EFFECT_PAYLOAD_SIZE, (const jbyte*)right);
+    (*env)->CallStaticVoidMethod(env, GlobalBridgeClass, BridgeClSetAdaptiveTriggersMethod,
+                                 controllerNumber, (jbyte)eventFlags, (jbyte)typeLeft,
+                                 (jbyte)typeRight, leftPayload, rightPayload);
+    (*env)->DeleteLocalRef(env, leftPayload);
+    (*env)->DeleteLocalRef(env, rightPayload);
+
+    if ((*env)->ExceptionCheck(env)) {
+        // We will crash here
+        (*JVM)->DetachCurrentThread(JVM);
+    }
+}
+
+void BridgeClSetPlayerIndicator(uint16_t controllerNumber, uint8_t playerIndicator) {
+    JNIEnv* env = GetThreadEnv();
+
+    (*env)->CallStaticVoidMethod(env, GlobalBridgeClass, BridgeClSetPlayerIndicatorMethod,
+                                 controllerNumber, (jbyte)playerIndicator);
+    if ((*env)->ExceptionCheck(env)) {
+        // We will crash here
+        (*JVM)->DetachCurrentThread(JVM);
+    }
+}
+
+void BridgeClControllerPcm(uint16_t controllerNumber, uint16_t sequence, uint32_t sampleRate,
+                           uint8_t channels, uint8_t bitsPerSample,
+                           const uint8_t* pcm, uint16_t pcmLength) {
+    JNIEnv* env = GetThreadEnv();
+    jbyteArray pcmArray = (*env)->NewByteArray(env, pcmLength);
+    if (pcmArray == NULL) {
+        return;
+    }
+
+    (*env)->SetByteArrayRegion(env, pcmArray, 0, pcmLength, (const jbyte*)pcm);
+    (*env)->CallStaticVoidMethod(env, GlobalBridgeClass, BridgeClControllerPcmMethod,
+                                 (jshort)controllerNumber, (jshort)sequence, (jint)sampleRate,
+                                 (jbyte)channels, (jbyte)bitsPerSample, pcmArray);
+    (*env)->DeleteLocalRef(env, pcmArray);
+    if ((*env)->ExceptionCheck(env)) {
+        (*JVM)->DetachCurrentThread(JVM);
+    }
+}
+
 void BridgeClLogMessage(const char* format, ...) {
     va_list va;
     va_start(va, format);
@@ -428,6 +493,9 @@ static CONNECTION_LISTENER_CALLBACKS BridgeConnListenerCallbacks = {
         .rumbleTriggers = BridgeClRumbleTriggers,
         .setMotionEventState = BridgeClSetMotionEventState,
         .setControllerLED = BridgeClSetControllerLED,
+        .setAdaptiveTriggers = BridgeClSetAdaptiveTriggers,
+        .setPlayerIndicator = BridgeClSetPlayerIndicator,
+        .controllerPcm = BridgeClControllerPcm,
 };
 
 static bool

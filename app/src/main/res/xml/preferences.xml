@@ -170,6 +170,13 @@
 
     <PreferenceCategory android:title="@string/category_gamepad_settings"
         android:key="category_gamepad_settings">
+        <ListPreference
+            android:key="list_gamepad_emulation"
+            android:title="@string/title_gamepad_emulation"
+            android:summary="@string/summary_gamepad_emulation"
+            android:entries="@array/gamepad_emulation_names"
+            android:entryValues="@array/gamepad_emulation_values"
+            android:defaultValue="auto" />
         <com.limelight.preferences.SeekBarPreference
             android:key="seekbar_deadzone"
             android:defaultValue="7"
