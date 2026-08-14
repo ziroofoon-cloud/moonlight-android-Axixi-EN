@@ -414,6 +414,8 @@ public class MoonBridge {
 
     public static native int sendControllerArrivalEvent(byte controllerNumber, short activeGamepadMask, byte type, int supportedButtonFlags, short capabilities);
 
+    public static native void cancelPendingControllerArrivalEvent(byte controllerNumber);
+
     public static native int sendControllerTouchEvent(byte controllerNumber, byte eventType, int pointerId, float x, float y, float pressure);
 
     public static native int sendControllerMotionEvent(byte controllerNumber, byte motionType, float x, float y, float z);

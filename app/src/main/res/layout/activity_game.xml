@@ -152,4 +152,24 @@
         android:layout_height="match_parent"
         android:layout_gravity="center"
         android:focusable="false" />
+
+    <!-- Session-local DS touchpad. The container itself stays non-clickable so empty space
+         continues to pass through to the stream and other virtual controls. -->
+    <FrameLayout
+        android:id="@+id/dsTouchpadPanel"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:clickable="false"
+        android:focusable="false"
+        android:visibility="gone">
+
+        <com.limelight.ui.virtualcontroller.DsTouchpadView
+            android:id="@+id/dsTouchpadView"
+            android:layout_width="260dp"
+            android:layout_height="150dp"
+            android:layout_gravity="top|center_horizontal"
+            android:layout_marginTop="48dp"
+            android:contentDescription="@string/game_menu_ds_touchpad"
+            android:preferKeepClear="true" />
+    </FrameLayout>
 </merge>

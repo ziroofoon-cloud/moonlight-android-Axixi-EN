@@ -72,6 +72,12 @@ Java_com_limelight_nvstream_jni_MoonBridge_sendControllerArrivalEvent(JNIEnv *en
     return LiSendControllerArrivalEvent(controllerNumber, activeGamepadMask, type, supportedButtonFlags, capabilities);
 }
 
+JNIEXPORT void JNICALL
+Java_com_limelight_nvstream_jni_MoonBridge_cancelPendingControllerArrivalEvent(JNIEnv *env, jclass clazz,
+                                                                               jbyte controllerNumber) {
+    LiCancelPendingControllerArrivalEvent(controllerNumber);
+}
+
 JNIEXPORT jint JNICALL
 Java_com_limelight_nvstream_jni_MoonBridge_sendControllerTouchEvent(JNIEnv *env, jclass clazz,
                                                                     jbyte controllerNumber,

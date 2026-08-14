@@ -137,7 +137,6 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
     private final GameGestures gestures;
     private final InputManager inputManager;
     private final Vibrator deviceVibrator;
-    private final VibratorManager deviceVibratorManager;
     private final SensorManager deviceSensorManager;
     private final SceManager sceManager;
     private final Handler mainThreadHandler;
@@ -145,6 +144,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
     private final Handler backgroundThreadHandler;
     private final PcmHapticsBackend optionalPcmHapticsBackend;
     private final String gamepadEmulationPreference;
+    private final boolean ds5ControllerSpeakerEnabled;
     private final NativePcmDownsampler[] nativePcmDownsamplers =
             new NativePcmDownsampler[MAX_GAMEPADS];
     private boolean hasGameController;
@@ -163,6 +163,8 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
 
     private final PreferenceConfiguration prefConfig;
     private short currentControllers, initialControllers;
+    private int reportedControllerArrivalMask;
+    private boolean virtualDsTouchpadSessionUsed;
 
     private final Runnable mouseEmulationRunnable = new Runnable() {
         @Override
@@ -213,6 +215,15 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                                              short lowFreqMotor, short highFreqMotor) {
         deviceContext.lowFreqMotor = lowFreqMotor;
         deviceContext.highFreqMotor = highFreqMotor;
+
+        // Keep forced body vibration as an explicit, live preference. Binding the device
+        // vibrator to a controller context during discovery allowed controllers incorrectly
+        // reported as internal by Android to bypass both device-rumble settings.
+        if (prefConfig.enableDeviceRumble && deviceVibrator != null && deviceVibrator.hasVibrator()) {
+            rumbleSingleVibrator(deviceVibrator,
+                    deviceContext.lowFreqMotor, deviceContext.highFreqMotor);
+            return true;
+        }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && deviceContext.vibratorManager != null) {
             if (deviceContext.quadVibrators) {
@@ -510,6 +521,9 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         this.prefConfig = prefConfig;
         this.gamepadEmulationPreference = PreferenceConfiguration.normalizeGamepadEmulation(
                 prefConfig.gamepadEmulation);
+        this.ds5ControllerSpeakerEnabled =
+                PreferenceConfiguration.GAMEPAD_EMULATION_DS5.equals(gamepadEmulationPreference) &&
+                        prefConfig.ds5ControllerSpeakerEnabled;
         this.optionalPcmHapticsBackend = optionalPcmHapticsBackend == null
                 ? NoOpPcmHapticsBackend.INSTANCE : optionalPcmHapticsBackend;
         this.deviceVibrator = (Vibrator) activityContext.getSystemService(Context.VIBRATOR_SERVICE);
@@ -522,13 +536,6 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         this.backgroundHandlerThread = new HandlerThread("ControllerHandler");
         this.backgroundHandlerThread.start();
         this.backgroundThreadHandler = new Handler(backgroundHandlerThread.getLooper());
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            this.deviceVibratorManager = (VibratorManager) activityContext.getSystemService(Context.VIBRATOR_MANAGER_SERVICE);
-        }
-        else {
-            this.deviceVibratorManager = null;
-        }
 
         this.sceManager = new SceManager(activityContext);
         this.sceManager.start();
@@ -930,7 +937,13 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         // We must do this after clearing the currentControllers entry so this
         // causes the device to be removed on the server PC.
         if (context.assignedControllerNumber) {
-            conn.sendControllerInput(context.controllerNumber, getActiveControllerMask(),
+            short activeControllerMask = getActiveControllerMask();
+            if (!hasAssignedControllerForSlot(context.controllerNumber) &&
+                    !hasOnscreenControllerSourceForSlot(context.controllerNumber)) {
+                clearControllerArrival(context.controllerNumber);
+                conn.cancelPendingControllerArrivalEvent((byte) context.controllerNumber);
+            }
+            conn.sendControllerInput(context.controllerNumber, activeControllerMask,
                     (short) 0,
                     (byte) 0, (byte) 0,
                     (short) 0, (short) 0,
@@ -960,6 +973,9 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                 // releaseControllerNumber() sends a neutral packet. If another input path still
                 // contributes to the same player, immediately restore its aggregated state.
                 sendControllerInputPacket(remainingContext);
+            }
+            else if (hasOnscreenControllerSourceForSlot(controllerNumber)) {
+                sendControllerInputPacket(defaultContext);
             }
         }
 
@@ -1005,6 +1021,16 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             }
         }
         return null;
+    }
+
+    private boolean hasAssignedControllerForSlot(short controllerNumber) {
+        return findAssignedControllerContext(controllerNumber, false) != null ||
+                findAssignedControllerContext(controllerNumber, true) != null;
+    }
+
+    private boolean hasOnscreenControllerSourceForSlot(short controllerNumber) {
+        return controllerNumber == defaultContext.controllerNumber &&
+                (prefConfig.onscreenController || virtualDsTouchpadSessionUsed);
     }
 
     private boolean isAssociatedJoystick(InputDevice originalDevice, InputDevice possibleAssociatedJoystick) {
@@ -1317,35 +1343,18 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         context.hasPaddles = MoonBridge.guessControllerHasPaddles(context.vendorId, context.productId);
         context.hasShare = MoonBridge.guessControllerHasShareButton(context.vendorId, context.productId);
 
-        if(prefConfig.enableDeviceRumble){
-            context.vibrator = deviceVibrator;
-        }else{
-            // Try to use the InputDevice's associated vibrators first
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hasQuadAmplitudeControlledRumbleVibrators(dev.getVibratorManager())) {
-                context.vibratorManager = dev.getVibratorManager();
-                context.quadVibrators = true;
-            }
-            else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hasDualAmplitudeControlledRumbleVibrators(dev.getVibratorManager())) {
-                context.vibratorManager = dev.getVibratorManager();
-                context.quadVibrators = false;
-            }
-            else if (dev.getVibrator().hasVibrator()) {
-                context.vibrator = dev.getVibrator();
-            }
-            else if (!context.external) {
-                // If this is an internal controller, try to use the device's vibrator
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hasQuadAmplitudeControlledRumbleVibrators(deviceVibratorManager)) {
-                    context.vibratorManager = deviceVibratorManager;
-                    context.quadVibrators = true;
-                }
-                else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hasDualAmplitudeControlledRumbleVibrators(deviceVibratorManager)) {
-                    context.vibratorManager = deviceVibratorManager;
-                    context.quadVibrators = false;
-                }
-                else if (deviceVibrator.hasVibrator()) {
-                    context.vibrator = deviceVibrator;
-                }
-            }
+        // Bind only vibrators owned by the InputDevice here. Device-body vibration is routed
+        // later by handleRumble() so the force and fallback preferences are always respected.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hasQuadAmplitudeControlledRumbleVibrators(dev.getVibratorManager())) {
+            context.vibratorManager = dev.getVibratorManager();
+            context.quadVibrators = true;
+        }
+        else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hasDualAmplitudeControlledRumbleVibrators(dev.getVibratorManager())) {
+            context.vibratorManager = dev.getVibratorManager();
+            context.quadVibrators = false;
+        }
+        else if (dev.getVibrator().hasVibrator()) {
+            context.vibrator = dev.getVibrator();
         }
         // On Android 12, we can try to use the InputDevice's sensors. This may not work if the
         // Linux kernel version doesn't have motion sensor support, which is common for third-party
@@ -1660,7 +1669,8 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
 
     private short getActiveControllerMask() {
         if (prefConfig.multiController) {
-            return (short)(currentControllers | initialControllers | (prefConfig.onscreenController ? 1 : 0));
+            return (short)(currentControllers | initialControllers |
+                    (prefConfig.onscreenController || virtualDsTouchpadSessionUsed ? 1 : 0));
         }
         else {
             // Only Player 1 is active with multi-controller disabled
@@ -2483,6 +2493,43 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         }
     }
 
+    private static int getControllerNumberBit(short controllerNumber) {
+        int index = controllerNumber & 0xFFFF;
+        return index < MAX_GAMEPADS ? 1 << index : 0;
+    }
+
+    private boolean hasReportedControllerArrival(short controllerNumber) {
+        int controllerBit = getControllerNumberBit(controllerNumber);
+        return controllerBit != 0 && (reportedControllerArrivalMask & controllerBit) != 0;
+    }
+
+    private void sendControllerArrival(short controllerNumber, byte type,
+                                       int supportedButtonFlags, short capabilities) {
+        supportedButtonFlags = addVirtualDsTouchpadButtonFlag(
+                controllerNumber, gamepadEmulationPreference, supportedButtonFlags);
+        capabilities = addVirtualDsTouchpadCapability(
+                controllerNumber, gamepadEmulationPreference, capabilities);
+        short activeControllerMask = getActiveControllerMask();
+        int result = conn.sendControllerArrivalEvent((byte) controllerNumber, activeControllerMask,
+                type, supportedButtonFlags, capabilities);
+        LimeLog.info("Controller arrival gamepad " + controllerNumber +
+                ": active=0x" + Integer.toHexString(activeControllerMask & 0xFFFF) +
+                " type=" + (type & 0xFF) +
+                " buttons=0x" + Integer.toHexString(supportedButtonFlags) +
+                " capabilities=0x" + Integer.toHexString(capabilities & 0xFFFF) +
+                " result=" + result);
+        if (result == 0) {
+            reportedControllerArrivalMask |= getControllerNumberBit(controllerNumber);
+        }
+    }
+
+    private void clearControllerArrival(short controllerNumber) {
+        int controllerBit = getControllerNumberBit(controllerNumber);
+        if (controllerBit != 0) {
+            reportedControllerArrivalMask &= ~controllerBit;
+        }
+    }
+
     /**
      * Converts the UI preference into controller-arrival capability bits.
      *
@@ -2502,9 +2549,116 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         }
     }
 
-    private short addGamepadEmulationPreference(short capabilities) {
+    public static boolean isDsGamepadEmulation(String preference) {
+        String normalizedPreference = PreferenceConfiguration.normalizeGamepadEmulation(preference);
+        return PreferenceConfiguration.GAMEPAD_EMULATION_DS4.equals(normalizedPreference) ||
+                PreferenceConfiguration.GAMEPAD_EMULATION_DS5.equals(normalizedPreference);
+    }
+
+    static short addVirtualDsTouchpadCapability(short controllerNumber, String emulationPreference,
+                                                 short capabilities) {
+        if (controllerNumber == 0 && isDsGamepadEmulation(emulationPreference)) {
+            capabilities |= MoonBridge.LI_CCAP_TOUCHPAD;
+        }
+        return capabilities;
+    }
+
+    static int addVirtualDsTouchpadButtonFlag(short controllerNumber, String emulationPreference,
+                                               int supportedButtonFlags) {
+        if (controllerNumber == 0 && isDsGamepadEmulation(emulationPreference)) {
+            supportedButtonFlags |= ControllerPacket.TOUCHPAD_FLAG;
+        }
+        return supportedButtonFlags;
+    }
+
+    static short applyGamepadEmulationPreference(short capabilities, String preference) {
         return (short) ((capabilities & ~MoonBridge.LI_CCAP_EMULATION_MASK) |
-                getGamepadEmulationCapabilities(gamepadEmulationPreference));
+                getGamepadEmulationCapabilities(preference));
+    }
+
+    private short addGamepadEmulationPreference(short capabilities) {
+        return applyGamepadEmulationPreference(capabilities, gamepadEmulationPreference);
+    }
+
+    static short getOnscreenControllerCapabilities(String emulationPreference,
+                                                    boolean canRumble,
+                                                    boolean hasAccelerometer,
+                                                    boolean hasGyroscope) {
+        short capabilities = MoonBridge.LI_CCAP_ANALOG_TRIGGERS;
+        if (canRumble) {
+            capabilities |= MoonBridge.LI_CCAP_RUMBLE;
+        }
+        if (hasAccelerometer) {
+            capabilities |= MoonBridge.LI_CCAP_ACCEL;
+        }
+        if (hasGyroscope) {
+            capabilities |= MoonBridge.LI_CCAP_GYRO;
+        }
+        return applyGamepadEmulationPreference(capabilities, emulationPreference);
+    }
+
+    static int getOnscreenControllerSupportedButtonFlags(boolean onlyStickClicks,
+                                                          boolean showGuideButton) {
+        int supportedButtonFlags = ControllerPacket.LS_CLK_FLAG | ControllerPacket.RS_CLK_FLAG;
+        if (!onlyStickClicks) {
+            supportedButtonFlags |= ControllerPacket.A_FLAG | ControllerPacket.B_FLAG |
+                    ControllerPacket.X_FLAG | ControllerPacket.Y_FLAG |
+                    ControllerPacket.UP_FLAG | ControllerPacket.DOWN_FLAG |
+                    ControllerPacket.LEFT_FLAG | ControllerPacket.RIGHT_FLAG |
+                    ControllerPacket.LB_FLAG | ControllerPacket.RB_FLAG |
+                    ControllerPacket.BACK_FLAG | ControllerPacket.PLAY_FLAG |
+                    ControllerPacket.TOUCHPAD_FLAG;
+        }
+        if (showGuideButton) {
+            supportedButtonFlags |= ControllerPacket.SPECIAL_BUTTON_FLAG;
+        }
+        return supportedButtonFlags;
+    }
+
+    private void sendOnscreenControllerArrivalIfNeeded() {
+        if ((!prefConfig.onscreenController && !virtualDsTouchpadSessionUsed) ||
+                hasReportedControllerArrival(defaultContext.controllerNumber)) {
+            return;
+        }
+
+        boolean motionEnabled = prefConfig.enableVirtualControllerMotion &&
+                deviceSensorManager != null;
+        boolean hasAccelerometer = motionEnabled &&
+                deviceSensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) != null;
+        boolean hasGyroscope = motionEnabled &&
+                deviceSensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE) != null;
+        boolean canRumble = prefConfig.vibrateOsc && !prefConfig.onlyL3R3 &&
+                deviceVibrator != null;
+
+        sendControllerArrival(defaultContext.controllerNumber, MoonBridge.LI_CTYPE_XBOX,
+                getOnscreenControllerSupportedButtonFlags(
+                        prefConfig.onlyL3R3, prefConfig.showGuideButton),
+                getOnscreenControllerCapabilities(gamepadEmulationPreference,
+                        canRumble, hasAccelerometer, hasGyroscope));
+    }
+
+    /**
+     * Copies native DualSense PCM while silencing only the speaker channels.
+     *
+     * <p>Each 48 kHz, 16-bit, four-channel frame contains speaker left/right followed by
+     * haptic left/right. The haptic samples are preserved byte-for-byte.</p>
+     *
+     * @param pcm validated interleaved DualSense PCM
+     * @return copied PCM with channels zero and one cleared, or an empty array for invalid input
+     */
+    static byte[] copyNativePcmWithoutSpeaker(byte[] pcm) {
+        if (pcm == null || pcm.length == 0 || pcm.length % 8 != 0) {
+            return new byte[0];
+        }
+
+        byte[] output = pcm.clone();
+        for (int offset = 0; offset < output.length; offset += 8) {
+            output[offset] = 0;
+            output[offset + 1] = 0;
+            output[offset + 2] = 0;
+            output[offset + 3] = 0;
+        }
+        return output;
     }
 
     /**
@@ -3379,15 +3533,21 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             }
         }
 
+        byte[] physicalDs5Pcm = null;
         for (int i = 0; i < usbDeviceContexts.size(); i++) {
             UsbDeviceContext deviceContext = usbDeviceContexts.valueAt(i);
             if (deviceContext.assignedControllerNumber &&
                     deviceContext.controllerNumber == controllerNumber &&
-                    deviceContext.device.hasAdvancedAudioHapticsSupport() &&
-                    deviceContext.device.submitNativeAudioHapticsFrame(pcm)) {
-                submitted = true;
-                addOutputDevice(outputDevices,
-                        getUsbControllerTypeDisplayName(deviceContext.device));
+                    deviceContext.device.hasAdvancedAudioHapticsSupport()) {
+                if (physicalDs5Pcm == null) {
+                    physicalDs5Pcm = ds5ControllerSpeakerEnabled
+                            ? pcm : copyNativePcmWithoutSpeaker(pcm);
+                }
+                if (deviceContext.device.submitNativeAudioHapticsFrame(physicalDs5Pcm)) {
+                    submitted = true;
+                    addOutputDevice(outputDevices,
+                            getUsbControllerTypeDisplayName(deviceContext.device));
+                }
             }
         }
 
@@ -3887,6 +4047,8 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                                short leftStickX, short leftStickY,
                                short rightStickX, short rightStickY,
                                byte leftTrigger, byte rightTrigger) {
+        sendOnscreenControllerArrivalIfNeeded();
+
         defaultContext.leftStickX = leftStickX;
         defaultContext.leftStickY = leftStickY;
 
@@ -3899,6 +4061,47 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         defaultContext.inputMap = buttonFlags;
 
         sendControllerInputPacket(defaultContext);
+    }
+
+    /**
+     * Makes the session-local DS touchpad a player-one controller source. Once enabled for a
+     * session, it remains in the active controller mask even after its view is hidden so the host
+     * doesn't hot-unplug the virtual controller while a game is running.
+     */
+    public synchronized boolean prepareVirtualDsTouchpad() {
+        if (stopped || !isDsGamepadEmulation(gamepadEmulationPreference)) {
+            return false;
+        }
+
+        virtualDsTouchpadSessionUsed = true;
+        sendOnscreenControllerArrivalIfNeeded();
+        return true;
+    }
+
+    public synchronized boolean reportVirtualDsTouchpadEvent(byte eventType, int pointerId,
+                                                               float x, float y, float pressure) {
+        if (!prepareVirtualDsTouchpad()) {
+            return false;
+        }
+
+        return conn.sendControllerTouchEvent((byte) defaultContext.controllerNumber, eventType,
+                pointerId, clampUnitRange(x), clampUnitRange(y), clampUnitRange(pressure)) !=
+                MoonBridge.LI_ERR_UNSUPPORTED;
+    }
+
+    public synchronized boolean reportVirtualDsTouchpadButton(boolean pressed) {
+        if (!prepareVirtualDsTouchpad()) {
+            return false;
+        }
+
+        if (pressed) {
+            defaultContext.inputMap |= ControllerPacket.TOUCHPAD_FLAG;
+        }
+        else {
+            defaultContext.inputMap &= ~ControllerPacket.TOUCHPAD_FLAG;
+        }
+        sendControllerInputPacket(defaultContext);
+        return true;
     }
 
     @Override
@@ -4406,8 +4609,8 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
 
             capabilities = addOptionalPcmHapticsCapability(
                     capabilities, inputDevice.getVendorId(), inputDevice.getProductId());
-            conn.sendControllerArrivalEvent((byte)controllerNumber, getActiveControllerMask(),
-                    reportedType, supportedButtonFlags, addGamepadEmulationPreference(capabilities));
+            ControllerHandler.this.sendControllerArrival(controllerNumber, reportedType, supportedButtonFlags,
+                    addGamepadEmulationPreference(capabilities));
 
             // After reporting arrival to the host, send initial battery state and begin monitoring
             //是否上报电池状态
@@ -4494,9 +4697,8 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         public void sendControllerArrival() {
             short capabilities = addOptionalPcmHapticsCapability(device.getCapabilities(),
                     device.getVendorId(), device.getProductId());
-            conn.sendControllerArrivalEvent((byte)controllerNumber, getActiveControllerMask(),
-                    device.getType(), device.getSupportedButtonFlags(),
-                    addGamepadEmulationPreference(capabilities));
+            ControllerHandler.this.sendControllerArrival(controllerNumber, device.getType(),
+                    device.getSupportedButtonFlags(), addGamepadEmulationPreference(capabilities));
         }
     }
 

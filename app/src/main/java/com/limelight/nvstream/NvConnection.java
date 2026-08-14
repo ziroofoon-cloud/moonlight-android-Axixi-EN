@@ -662,6 +662,10 @@ public class NvConnection {
         return MoonBridge.sendControllerArrivalEvent(controllerNumber, activeGamepadMask, type, supportedButtonFlags, capabilities);
     }
 
+    public void cancelPendingControllerArrivalEvent(byte controllerNumber) {
+        MoonBridge.cancelPendingControllerArrivalEvent(controllerNumber);
+    }
+
     public int sendControllerTouchEvent(byte controllerNumber, byte eventType, int pointerId,
                                         float x, float y, float pressure) {
         if (!isMonkey) {

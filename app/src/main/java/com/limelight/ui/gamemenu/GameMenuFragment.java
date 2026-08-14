@@ -522,6 +522,8 @@ public class GameMenuFragment extends BaseGameMenuDialog implements View.OnClick
             fragment.setGamePadMode(game==null? KeyBoardController.ControllerMode.NONE:game.getVirtualControllerMode());
             fragment.setGameKeyMode(game==null? KeyBoardController.ControllerMode.NONE:game.getVirtualKeyControllerMode());
             fragment.setPrefConfig(game==null?new PreferenceConfiguration():game.prefConfig);
+            fragment.setDsTouchpadState(game != null && game.isDsTouchpadSupported(),
+                    game != null && game.isDsTouchpadVisible());
             fragment.setOnClick(new GameMenuVirtualViewFragment.onClick() {
                 @Override
                 public void click(String name, int index) {
@@ -546,6 +548,11 @@ public class GameMenuFragment extends BaseGameMenuDialog implements View.OnClick
                         return;
                     }
                     game.switchVirtualKeyController(mode);
+                }
+
+                @Override
+                public boolean toggleDsTouchpad() {
+                    return game != null && game.toggleDsTouchpad();
                 }
             });
             fragment.show(getFragmentManager());

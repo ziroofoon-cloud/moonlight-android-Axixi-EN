@@ -47,6 +47,7 @@ import com.limelight.ui.GameGestures;
 import com.limelight.ui.BaseFragmentDialog.BaseGameMenuFragmentDialog;
 import com.limelight.ui.StreamView;
 import com.limelight.ui.StreamLoadingOverlayController;
+import com.limelight.ui.virtualcontroller.DsTouchpadView;
 import com.limelight.ui.virtualmouse.RemoteMouseSink;
 import com.limelight.ui.virtualmouse.VirtualMouseController;
 import com.limelight.ui.virtualmouse.VirtualMouseOverlay;
@@ -104,6 +105,7 @@ import android.text.format.Formatter;
 import android.text.style.ForegroundColorSpan;
 import android.util.Log;
 import android.util.Rational;
+import android.util.DisplayMetrics;
 import android.util.TypedValue;
 import android.view.Display;
 import android.view.Gravity;
@@ -197,6 +199,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     private static final int STYLUS_UP_DEAD_ZONE_RADIUS = 50;
 
     private static final int THREE_FINGER_TAP_THRESHOLD = 300;
+    private static final long DS_TOUCHPAD_CLICK_DURATION_MS = 60L;
 
     private ControllerHandler controllerHandler;
     private KeyboardTranslator keyboardTranslator;
@@ -240,6 +243,15 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     private VideoProcessingGLSurfaceView fsrView;
     private FsrVideoProcessor fsrVideoProcessor;
     private VirtualMouseOverlay virtualMouseOverlay;
+    private FrameLayout dsTouchpadPanel;
+    private DsTouchpadView dsTouchpadView;
+    private boolean dsTouchpadVisible;
+    private boolean dsTouchpadSessionPrepared;
+    private final Runnable dsTouchpadButtonReleaseRunnable = () -> {
+        if (controllerHandler != null) {
+            controllerHandler.reportVirtualDsTouchpadButton(false);
+        }
+    };
     private VideoZoomController videoZoomController;
     private VideoZoomGestureOverlay videoZoomGestureOverlay;
     private final PointF videoZoomTapPoint = new PointF();
@@ -599,6 +611,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
         rootView=streamView.getParent();
 
+        dsTouchpadPanel = findViewById(R.id.dsTouchpadPanel);
+        dsTouchpadView = findViewById(R.id.dsTouchpadView);
+        dsTouchpadPanel.post(this::updateDsTouchpadLayout);
+
         videoZoomGestureOverlay = findViewById(R.id.videoZoomGestureOverlay);
         videoZoomController = new VideoZoomController((View) rootView, streamView, fsrView);
         videoZoomGestureOverlay.bind(videoZoomController, this::handleVideoZoomTap);
@@ -935,6 +951,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 });
         controllerHandler = new ControllerHandler(this, conn, this, prefConfig,
                 optionalPcmHapticsBackend);
+        bindDsTouchpadView();
         keyboardTranslator = new KeyboardTranslator();
 
         InputManager inputManager = (InputManager) getSystemService(Context.INPUT_SERVICE);
@@ -1028,6 +1045,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         keyBoardController=new KeyBoardController(controllerHandler, (FrameLayout) rootView, this,prefConfig,false);
 //        keyBoardController.refreshLayout();
         keyBoardController.show();
+        bringDsTouchpadToFront();
     }
 
 
@@ -1035,12 +1053,14 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         virtualController = new KeyBoardController(controllerHandler,(FrameLayout) rootView, this,prefConfig,true);
 //        virtualController.refreshLayout();
         virtualController.show();
+        bringDsTouchpadToFront();
     }
 
     private void initkeyBoardLayoutController(){
         keyBoardLayoutController=new KeyBoardLayoutController(controllerHandler,(FrameLayout)rootView, this,prefConfig);
         keyBoardLayoutController.refreshLayout();
         keyBoardLayoutController.show();
+        bringDsTouchpadToFront();
     }
 
     //显示隐藏虚拟特殊按键
@@ -1073,6 +1093,156 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             return;
         }
         prefConfig.onscreenController= virtualController.switchShowHide() != 0;
+        bringDsTouchpadToFront();
+    }
+
+    public boolean isDsTouchpadVisible() {
+        return dsTouchpadVisible;
+    }
+
+    public boolean isDsTouchpadSupported() {
+        return prefConfig != null &&
+                ControllerHandler.isDsGamepadEmulation(prefConfig.gamepadEmulation);
+    }
+
+    public boolean toggleDsTouchpad() {
+        boolean show = !dsTouchpadVisible;
+        if (show && (controllerHandler == null ||
+                !controllerHandler.prepareVirtualDsTouchpad())) {
+            return false;
+        }
+        if (show) {
+            dsTouchpadSessionPrepared = true;
+        }
+
+        if (!show) {
+            releaseDsTouchpadInput();
+        }
+        dsTouchpadVisible = show;
+        updateDsTouchpadVisibility();
+        Toast.makeText(this, show ? R.string.game_menu_ds_touchpad_shown :
+                R.string.game_menu_ds_touchpad_hidden, Toast.LENGTH_SHORT).show();
+        return dsTouchpadVisible;
+    }
+
+    private void bindDsTouchpadView() {
+        if (dsTouchpadView == null) {
+            return;
+        }
+
+        dsTouchpadView.setListener(new DsTouchpadView.Listener() {
+            @Override
+            public void onTouchBegin(int pointerId, float normalizedX, float normalizedY) {
+                reportDsTouchpadEvent(MoonBridge.LI_TOUCH_EVENT_DOWN, pointerId,
+                        normalizedX, normalizedY, 1.0f);
+            }
+
+            @Override
+            public void onTouchMove(int pointerId, float normalizedX, float normalizedY) {
+                reportDsTouchpadEvent(MoonBridge.LI_TOUCH_EVENT_MOVE, pointerId,
+                        normalizedX, normalizedY, 1.0f);
+            }
+
+            @Override
+            public void onTouchEnd(int pointerId, float normalizedX, float normalizedY) {
+                reportDsTouchpadEvent(MoonBridge.LI_TOUCH_EVENT_UP, pointerId,
+                        normalizedX, normalizedY, 0.0f);
+            }
+
+            @Override
+            public void onCancelAll() {
+                reportDsTouchpadEvent(MoonBridge.LI_TOUCH_EVENT_CANCEL_ALL,
+                        0, 0.0f, 0.0f, 0.0f);
+            }
+
+            @Override
+            public void onTap() {
+                if (controllerHandler == null ||
+                        !controllerHandler.reportVirtualDsTouchpadButton(true)) {
+                    return;
+                }
+                dsTouchpadView.removeCallbacks(dsTouchpadButtonReleaseRunnable);
+                dsTouchpadView.postDelayed(dsTouchpadButtonReleaseRunnable,
+                        DS_TOUCHPAD_CLICK_DURATION_MS);
+            }
+
+            @Override
+            public void onLongPressStart() {
+                dsTouchpadView.removeCallbacks(dsTouchpadButtonReleaseRunnable);
+                if (controllerHandler != null) {
+                    controllerHandler.reportVirtualDsTouchpadButton(true);
+                }
+            }
+
+            @Override
+            public void onLongPressEnd() {
+                dsTouchpadView.removeCallbacks(dsTouchpadButtonReleaseRunnable);
+                if (controllerHandler != null) {
+                    controllerHandler.reportVirtualDsTouchpadButton(false);
+                }
+            }
+        });
+    }
+
+    private void reportDsTouchpadEvent(byte eventType, int pointerId,
+                                       float x, float y, float pressure) {
+        if (controllerHandler != null) {
+            controllerHandler.reportVirtualDsTouchpadEvent(
+                    eventType, pointerId, x, y, pressure);
+        }
+    }
+
+    private void releaseDsTouchpadInput() {
+        if (dsTouchpadView != null) {
+            dsTouchpadView.removeCallbacks(dsTouchpadButtonReleaseRunnable);
+            dsTouchpadView.releaseTouches();
+        }
+        if (dsTouchpadSessionPrepared && controllerHandler != null && isDsTouchpadSupported()) {
+            controllerHandler.reportVirtualDsTouchpadButton(false);
+            controllerHandler.reportVirtualDsTouchpadEvent(MoonBridge.LI_TOUCH_EVENT_CANCEL_ALL,
+                    0, 0.0f, 0.0f, 0.0f);
+        }
+    }
+
+    private void updateDsTouchpadVisibility() {
+        if (dsTouchpadPanel == null) {
+            return;
+        }
+
+        boolean show = dsTouchpadVisible && isDsTouchpadSupported() && !isHidingOverlays;
+        dsTouchpadPanel.setVisibility(show ? View.VISIBLE : View.GONE);
+        if (show) {
+            dsTouchpadPanel.post(this::updateDsTouchpadLayout);
+            dsTouchpadPanel.bringToFront();
+        }
+    }
+
+    private void bringDsTouchpadToFront() {
+        if (dsTouchpadPanel != null && dsTouchpadPanel.getVisibility() == View.VISIBLE) {
+            dsTouchpadPanel.bringToFront();
+        }
+    }
+
+    private void updateDsTouchpadLayout() {
+        if (dsTouchpadView == null) {
+            return;
+        }
+
+        boolean portrait = getResources().getConfiguration().orientation ==
+                Configuration.ORIENTATION_PORTRAIT;
+        DisplayMetrics metrics = getResources().getDisplayMetrics();
+        int width = Math.min(Math.round(metrics.widthPixels * (portrait ? 0.52f : 0.28f)),
+                UiHelper.dpToPx(this, 300));
+        int height = Math.max(UiHelper.dpToPx(this, 118), Math.round(width * 0.56f));
+        FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) dsTouchpadView.getLayoutParams();
+        params.width = width;
+        params.height = height;
+        params.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+        params.topMargin = UiHelper.dpToPx(this, portrait ? 100 : 48);
+        params.leftMargin = 0;
+        params.rightMargin = 0;
+        params.bottomMargin = 0;
+        dsTouchpadView.setLayoutParams(params);
     }
 
     private void setPreferredOrientationForCurrentDisplay() {
@@ -1126,6 +1296,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
+        releaseDsTouchpadInput();
         if (virtualMouseOverlay != null) {
             virtualMouseOverlay.cancelActiveInteractions();
         }
@@ -1155,6 +1326,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             if (isInPictureInPictureMode()) {
                 isHidingOverlays = true;
+                updateDsTouchpadVisibility();
 
                 if (virtualController != null) {
                     virtualController.hide();
@@ -1181,6 +1353,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             }
             else {
                 isHidingOverlays = false;
+                updateDsTouchpadVisibility();
 
                 // Restore overlays to previous state when leaving PiP
 //                if (virtualController != null) {
@@ -1207,6 +1380,8 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 UiHelper.notifyStreamExitingPiP(this);
             }
         }
+
+        updateDsTouchpadLayout();
 
         if (virtualMouseOverlay != null) {
             setVirtualMouseInputSuppressed(isHidingOverlays);
@@ -1644,6 +1819,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         logSessionInfo("LIFECYCLE", "串流页面正在销毁");
         backgroundReconnectHandler.removeCallbacksAndMessages(null);
         releaseExternalDisplayRouting();
+        releaseDsTouchpadInput();
 
         if (virtualMouseOverlay != null) {
             virtualMouseOverlay.destroy();
@@ -1730,6 +1906,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     @Override
     protected void onPause() {
         activityResumed = false;
+        releaseDsTouchpadInput();
 
         if (!isFinishing()) {
             suspendStreamForBackground();
@@ -4934,6 +5111,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 dialogGameMenu.getDialog().isShowing()) {
             return;
         }
+        releaseDsTouchpadInput();
         setVirtualMouseInputSuppressed(true);
         setVideoZoomInputSuppressed(true);
         if (controllerHandler != null) {
