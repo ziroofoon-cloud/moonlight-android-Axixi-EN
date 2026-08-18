@@ -70,6 +70,11 @@ public final class StreamSessionLogger {
         writeRaw("触觉: 音频输出=" + safe(config.audioHapticsOutputTarget)
                 + ", 强度=" + config.audioHapticsStrength + "%"
                 + ", 保留普通震动=" + onOff(config.audioHapticsKeepControllerRumble));
+        boolean explicitDs5 = PreferenceConfiguration.GAMEPAD_EMULATION_DS5.equals(
+                PreferenceConfiguration.normalizeGamepadEmulation(config.gamepadEmulation));
+        writeRaw("手柄: 串流类型=" + safe(config.gamepadEmulation)
+                + ", 原生DS5触觉PCM=" + onOff(explicitDs5 && config.ds5NativePcmEnabled)
+                + ", DS5扬声器=" + onOff(explicitDs5 && config.ds5ControllerSpeakerEnabled));
         writeRaw("------------------------------------------------------------");
         info("SESSION", "会话日志开始");
     }

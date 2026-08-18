@@ -45,6 +45,34 @@ public class ControllerHandlerTest {
     }
 
     @Test
+    public void nativeDs5PcmRequiresExplicitDs5SelectionAndEnabledPreference() {
+        assertEquals(true, ControllerHandler.isNativeDs5PcmEnabled(
+                PreferenceConfiguration.GAMEPAD_EMULATION_DS5, true));
+        assertEquals(false, ControllerHandler.isNativeDs5PcmEnabled(
+                PreferenceConfiguration.GAMEPAD_EMULATION_AUTO, true));
+        assertEquals(false, ControllerHandler.isNativeDs5PcmEnabled(
+                PreferenceConfiguration.GAMEPAD_EMULATION_DS5, false));
+    }
+
+    @Test
+    public void nativeDs5PcmCapabilityIsFilteredByPreferenceAndBackendSupport() {
+        short physicalPcm = (short) (MoonBridge.LI_CCAP_RUMBLE |
+                MoonBridge.LI_CCAP_HAPTIC_PCM);
+
+        assertEquals(physicalPcm, ControllerHandler.applyNativeDs5PcmCapability(
+                physicalPcm, true, false));
+        assertEquals(MoonBridge.LI_CCAP_RUMBLE,
+                ControllerHandler.applyNativeDs5PcmCapability(
+                        physicalPcm, false, false));
+        assertEquals(MoonBridge.LI_CCAP_RUMBLE | MoonBridge.LI_CCAP_HAPTIC_PCM,
+                ControllerHandler.applyNativeDs5PcmCapability(
+                        MoonBridge.LI_CCAP_RUMBLE, true, true));
+        assertEquals(MoonBridge.LI_CCAP_RUMBLE,
+                ControllerHandler.applyNativeDs5PcmCapability(
+                        MoonBridge.LI_CCAP_RUMBLE, true, false));
+    }
+
+    @Test
     public void onscreenDs5CapabilitiesContainOnlyAvailableFeatures() {
         short capabilities = ControllerHandler.getOnscreenControllerCapabilities(
                 PreferenceConfiguration.GAMEPAD_EMULATION_DS5,

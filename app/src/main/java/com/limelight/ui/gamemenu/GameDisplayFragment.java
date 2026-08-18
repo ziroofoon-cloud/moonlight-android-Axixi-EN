@@ -76,6 +76,10 @@ public class GameDisplayFragment extends BaseGameMenuDialog implements View.OnCl
 
     private RadioGroup rg_game_display_ds5_controller_speaker;
 
+    private View v_game_display_ds5_native_pcm;
+
+    private RadioGroup rg_game_display_ds5_native_pcm;
+
     private View v_game_display_stereo_3d_header;
 
     private RadioGroup rg_game_display_stereo_3d;
@@ -130,6 +134,8 @@ public class GameDisplayFragment extends BaseGameMenuDialog implements View.OnCl
 
     private boolean ds5ControllerSpeakerPending;
 
+    private boolean ds5NativePcmPending = true;
+
     @Override
     public void bindView(View v) {
         super.bindView(v);
@@ -162,6 +168,8 @@ public class GameDisplayFragment extends BaseGameMenuDialog implements View.OnCl
         rg_game_display_gamepad_emulation=v.findViewById(R.id.rg_game_display_gamepad_emulation);
         v_game_display_ds5_controller_speaker=v.findViewById(R.id.v_game_display_ds5_controller_speaker);
         rg_game_display_ds5_controller_speaker=v.findViewById(R.id.rg_game_display_ds5_controller_speaker);
+        v_game_display_ds5_native_pcm=v.findViewById(R.id.v_game_display_ds5_native_pcm);
+        rg_game_display_ds5_native_pcm=v.findViewById(R.id.rg_game_display_ds5_native_pcm);
         v_game_display_stereo_3d_header=v.findViewById(R.id.v_game_display_stereo_3d_header);
         rg_game_display_stereo_3d=v.findViewById(R.id.rg_game_display_stereo_3d);
         v_game_display_stereo_3d_details=v.findViewById(R.id.v_game_display_stereo_3d_details);
@@ -191,6 +199,7 @@ public class GameDisplayFragment extends BaseGameMenuDialog implements View.OnCl
             gamepadEmulationPending = PreferenceConfiguration.normalizeGamepadEmulation(
                     prefConfig.gamepadEmulation);
             ds5ControllerSpeakerPending = prefConfig.ds5ControllerSpeakerEnabled;
+            ds5NativePcmPending = prefConfig.ds5NativePcmEnabled;
         }
         fsrTargetPending = PreferenceManager.getDefaultSharedPreferences(getActivity())
                 .getString("list_fsr_target", "off");
@@ -220,6 +229,7 @@ public class GameDisplayFragment extends BaseGameMenuDialog implements View.OnCl
         initRenderMode();
         initGamepadEmulation();
         initDs5ControllerSpeaker();
+        initDs5NativePcm();
         initStereo3d();
         initStereo3dDepth();
         initStereo3dConvergence();
@@ -389,12 +399,16 @@ public class GameDisplayFragment extends BaseGameMenuDialog implements View.OnCl
             else {
                 gamepadEmulationPending = PreferenceConfiguration.GAMEPAD_EMULATION_AUTO;
             }
-            updateDs5ControllerSpeakerVisibility();
+            updateDs5OptionVisibility();
         });
 
         rg_game_display_ds5_controller_speaker.setOnCheckedChangeListener((group, checkedId) -> {
             ds5ControllerSpeakerPending =
                     checkedId == R.id.rbt_game_display_ds5_controller_speaker_1;
+        });
+
+        rg_game_display_ds5_native_pcm.setOnCheckedChangeListener((group, checkedId) -> {
+            ds5NativePcmPending = checkedId == R.id.rbt_game_display_ds5_native_pcm_1;
         });
 
         rg_game_display_stereo_3d_depth.setOnCheckedChangeListener((group, checkedId) -> {
@@ -511,14 +525,24 @@ public class GameDisplayFragment extends BaseGameMenuDialog implements View.OnCl
         rg_game_display_ds5_controller_speaker.check(ds5ControllerSpeakerPending
                 ? R.id.rbt_game_display_ds5_controller_speaker_1
                 : R.id.rbt_game_display_ds5_controller_speaker_2);
-        updateDs5ControllerSpeakerVisibility();
+        updateDs5OptionVisibility();
     }
 
-    private void updateDs5ControllerSpeakerVisibility() {
+    private void initDs5NativePcm() {
+        rg_game_display_ds5_native_pcm.check(ds5NativePcmPending
+                ? R.id.rbt_game_display_ds5_native_pcm_1
+                : R.id.rbt_game_display_ds5_native_pcm_2);
+        updateDs5OptionVisibility();
+    }
+
+    private void updateDs5OptionVisibility() {
+        int visibility = PreferenceConfiguration.GAMEPAD_EMULATION_DS5.equals(
+                gamepadEmulationPending) ? View.VISIBLE : View.GONE;
         if (v_game_display_ds5_controller_speaker != null) {
-            v_game_display_ds5_controller_speaker.setVisibility(
-                    PreferenceConfiguration.GAMEPAD_EMULATION_DS5.equals(gamepadEmulationPending)
-                            ? View.VISIBLE : View.GONE);
+            v_game_display_ds5_controller_speaker.setVisibility(visibility);
+        }
+        if (v_game_display_ds5_native_pcm != null) {
+            v_game_display_ds5_native_pcm.setVisibility(visibility);
         }
     }
 
@@ -815,6 +839,8 @@ public class GameDisplayFragment extends BaseGameMenuDialog implements View.OnCl
                             gamepadEmulationPending)
                     .putBoolean(PreferenceConfiguration.DS5_CONTROLLER_SPEAKER_PREF_STRING,
                             ds5ControllerSpeakerPending)
+                    .putBoolean(PreferenceConfiguration.DS5_NATIVE_PCM_PREF_STRING,
+                            ds5NativePcmPending)
                     .commit();
             if(prefConfig!=null){
                 prefConfig.width=width;
@@ -833,6 +859,7 @@ public class GameDisplayFragment extends BaseGameMenuDialog implements View.OnCl
                 prefConfig.stereo3dSwapEyes = stereo3dSwapEyesPending;
                 prefConfig.gamepadEmulation = gamepadEmulationPending;
                 prefConfig.ds5ControllerSpeakerEnabled = ds5ControllerSpeakerPending;
+                prefConfig.ds5NativePcmEnabled = ds5NativePcmPending;
             }
             dismiss();
             onClick.click();

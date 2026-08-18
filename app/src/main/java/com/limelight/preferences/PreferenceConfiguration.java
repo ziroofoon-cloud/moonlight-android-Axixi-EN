@@ -127,6 +127,7 @@ public class PreferenceConfiguration {
     private static final String GAMEPAD_MOTION_FALLBACK_PREF_STRING = "checkbox_gamepad_motion_fallback";
     public static final String GAMEPAD_EMULATION_PREF_STRING = "list_gamepad_emulation";
     public static final String DS5_CONTROLLER_SPEAKER_PREF_STRING = "checkbox_ds5_controller_speaker";
+    public static final String DS5_NATIVE_PCM_PREF_STRING = "checkbox_ds5_native_pcm";
     public static final String GAMEPAD_EMULATION_AUTO = "auto";
     public static final String GAMEPAD_EMULATION_X360 = "x360";
     public static final String GAMEPAD_EMULATION_DS4 = "ds4";
@@ -341,6 +342,7 @@ public class PreferenceConfiguration {
     public boolean gamepadMotionSensorsFallbackToDevice;
     public String gamepadEmulation;
     public boolean ds5ControllerSpeakerEnabled;
+    public boolean ds5NativePcmEnabled = true;
 
     //开启虚拟手柄的陀螺仪功能
     public boolean enableVirtualControllerMotion;
@@ -1101,6 +1103,7 @@ public class PreferenceConfiguration {
                 GAMEPAD_EMULATION_PREF_STRING, GAMEPAD_EMULATION_AUTO));
         config.ds5ControllerSpeakerEnabled = prefs.getBoolean(
                 DS5_CONTROLLER_SPEAKER_PREF_STRING, false);
+        config.ds5NativePcmEnabled = prefs.getBoolean(DS5_NATIVE_PCM_PREF_STRING, true);
 
         config.performanceOverlayLiteMaginTop=prefs.getInt("performance_overlayLite_magin_top",4);
 

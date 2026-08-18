@@ -145,6 +145,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
     private final PcmHapticsBackend optionalPcmHapticsBackend;
     private final String gamepadEmulationPreference;
     private final boolean ds5ControllerSpeakerEnabled;
+    private final boolean ds5NativePcmEnabled;
     private final NativePcmDownsampler[] nativePcmDownsamplers =
             new NativePcmDownsampler[MAX_GAMEPADS];
     private boolean hasGameController;
@@ -253,12 +254,10 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                 && optionalPcmHapticsBackend.handlesDevice(vendorId, productId);
     }
 
-    private short addOptionalPcmHapticsCapability(short capabilities,
-                                                   int vendorId, int productId) {
-        if (optionalPcmHapticsBackend.handlesDevice(vendorId, productId)) {
-            return (short) (capabilities | MoonBridge.LI_CCAP_HAPTIC_PCM);
-        }
-        return capabilities;
+    private short configureNativePcmCapability(short capabilities,
+                                                int vendorId, int productId) {
+        return applyNativeDs5PcmCapability(capabilities, ds5NativePcmEnabled,
+                optionalPcmHapticsBackend.handlesDevice(vendorId, productId));
     }
 
     private static boolean hasRumbleAmplitude(short lowFreqMotor, short highFreqMotor) {
@@ -524,6 +523,8 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         this.ds5ControllerSpeakerEnabled =
                 PreferenceConfiguration.GAMEPAD_EMULATION_DS5.equals(gamepadEmulationPreference) &&
                         prefConfig.ds5ControllerSpeakerEnabled;
+        this.ds5NativePcmEnabled = isNativeDs5PcmEnabled(
+                gamepadEmulationPreference, prefConfig.ds5NativePcmEnabled);
         this.optionalPcmHapticsBackend = optionalPcmHapticsBackend == null
                 ? NoOpPcmHapticsBackend.INSTANCE : optionalPcmHapticsBackend;
         this.deviceVibrator = (Vibrator) activityContext.getSystemService(Context.VIBRATOR_SERVICE);
@@ -661,6 +662,8 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             return;
         }
 
+        stopAllHaptics();
+
         // Stop new device contexts from being created or used
         releaseMouseEmulationButtons();
         mouseEmulationActive = false;
@@ -682,7 +685,61 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             deviceContext.destroy();
         }
 
-        deviceVibrator.cancel();
+    }
+
+    /**
+     * Explicitly clears every haptics route while the device handles are still valid.
+     * This deliberately uses the normal zero-rumble path so the optional 1 ms
+     * "震动停止方案A" compatibility pulse is preserved for the device vibrator.
+     */
+    public synchronized void stopAllHaptics() {
+        if (stopped) {
+            return;
+        }
+
+        optionalPcmHapticsBackend.stopRumble();
+
+        boolean deviceVibratorStopped = false;
+        for (int i = 0; i < inputDeviceContexts.size(); i++) {
+            InputDeviceContext deviceContext = inputDeviceContexts.valueAt(i);
+            deviceContext.leftTriggerMotor = 0;
+            deviceContext.rightTriggerMotor = 0;
+
+            if (prefConfig.enableDeviceRumble && deviceVibrator != null &&
+                    deviceVibrator.hasVibrator()) {
+                deviceContext.lowFreqMotor = 0;
+                deviceContext.highFreqMotor = 0;
+                if (!deviceVibratorStopped) {
+                    rumbleSingleVibrator(deviceVibrator, (short) 0, (short) 0);
+                    deviceVibratorStopped = true;
+                }
+            }
+            else {
+                rumbleInputDeviceContext(deviceContext, (short) 0, (short) 0);
+            }
+        }
+
+        for (int i = 0; i < usbDeviceContexts.size(); i++) {
+            AbstractController controller = usbDeviceContexts.valueAt(i).device;
+            controller.stopAdvancedAudioHaptics();
+            controller.rumbleTriggers((short) 0, (short) 0);
+            controller.rumble((short) 0, (short) 0);
+        }
+
+        // Device-body rumble may have been used by on-screen controls or fallback routing even
+        // when there are no physical input contexts, so always clear it exactly once.
+        if (!deviceVibratorStopped && deviceVibrator != null && deviceVibrator.hasVibrator()) {
+            rumbleSingleVibrator(deviceVibrator, (short) 0, (short) 0);
+        }
+
+        for (int i = 0; i < nativePcmDownsamplers.length; i++) {
+            nativePcmDownsamplers[i] = null;
+        }
+        lastNativeControllerPcmTimeMs = 0L;
+        nativeGameHapticsOutputRoute = "";
+        nativeGameHapticsOutputTimeMs = 0L;
+        audioHapticsOutputRoute = "";
+        audioHapticsOutputTimeMs = 0L;
     }
 
     public void destroy() {
@@ -2576,6 +2633,22 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                 getGamepadEmulationCapabilities(preference));
     }
 
+    static boolean isNativeDs5PcmEnabled(String emulationPreference, boolean preferenceEnabled) {
+        return preferenceEnabled && PreferenceConfiguration.GAMEPAD_EMULATION_DS5.equals(
+                PreferenceConfiguration.normalizeGamepadEmulation(emulationPreference));
+    }
+
+    static short applyNativeDs5PcmCapability(short capabilities, boolean enabled,
+                                              boolean optionalBackendSupportsDevice) {
+        boolean physicalControllerSupportsPcm =
+                (capabilities & MoonBridge.LI_CCAP_HAPTIC_PCM) != 0;
+        capabilities = (short) (capabilities & ~MoonBridge.LI_CCAP_HAPTIC_PCM);
+        if (enabled && (physicalControllerSupportsPcm || optionalBackendSupportsDevice)) {
+            capabilities |= MoonBridge.LI_CCAP_HAPTIC_PCM;
+        }
+        return capabilities;
+    }
+
     private short addGamepadEmulationPreference(short capabilities) {
         return applyGamepadEmulationPreference(capabilities, gamepadEmulationPreference);
     }
@@ -3481,7 +3554,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
     public synchronized boolean handleControllerNativePcm(short controllerNumber, int sampleRate,
                                                           byte channels, byte bitsPerSample,
                                                           byte[] pcm) {
-        if (stopped || sampleRate != NATIVE_CONTROLLER_PCM_SOURCE_RATE ||
+        if (stopped || !ds5NativePcmEnabled || sampleRate != NATIVE_CONTROLLER_PCM_SOURCE_RATE ||
                 (channels & 0xFF) != NATIVE_CONTROLLER_PCM_CHANNELS ||
                 (bitsPerSample & 0xFF) != 16 || pcm == null || pcm.length == 0 ||
                 pcm.length > 3920 || pcm.length % 8 != 0) {
@@ -3553,7 +3626,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
 
         if (submitted) {
             lastNativeControllerPcmTimeMs = SystemClock.uptimeMillis();
-            markAudioHapticsOutput("原生PCM", outputDevices);
+            markNativeGameHapticsOutput("原生PCM", outputDevices);
         }
         return submitted;
     }
@@ -4607,7 +4680,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                 }
             }
 
-            capabilities = addOptionalPcmHapticsCapability(
+            capabilities = configureNativePcmCapability(
                     capabilities, inputDevice.getVendorId(), inputDevice.getProductId());
             ControllerHandler.this.sendControllerArrival(controllerNumber, reportedType, supportedButtonFlags,
                     addGamepadEmulationPreference(capabilities));
@@ -4695,7 +4768,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
 
         @Override
         public void sendControllerArrival() {
-            short capabilities = addOptionalPcmHapticsCapability(device.getCapabilities(),
+            short capabilities = configureNativePcmCapability(device.getCapabilities(),
                     device.getVendorId(), device.getProductId());
             ControllerHandler.this.sendControllerArrival(controllerNumber, device.getType(),
                     device.getSupportedButtonFlags(), addGamepadEmulationPreference(capabilities));

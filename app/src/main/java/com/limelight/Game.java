@@ -4847,6 +4847,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             setInputGrabState(false);
         }
         if (controllerHandler != null) {
+            controllerHandler.stopAllHaptics();
             controllerHandler.disableSensors();
         }
 
@@ -4888,6 +4889,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             audioRenderer.setBackgrounded(false);
         }
         if (controllerHandler != null) {
+            controllerHandler.refreshAudioHapticsState();
             controllerHandler.enableSensors();
         }
 

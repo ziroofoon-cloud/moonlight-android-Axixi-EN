@@ -34,6 +34,10 @@ public interface PcmHapticsBackend {
 
     boolean submitPcm(byte[] pcm, int sampleRate, int channelCount, float gain);
 
+    /** Sends an explicit zero-output command without tearing down the USB session. */
+    default void stopRumble() {
+    }
+
     void stop();
 
     void destroy();
