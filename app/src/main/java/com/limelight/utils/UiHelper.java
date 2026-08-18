@@ -204,7 +204,7 @@ public class UiHelper {
                     // Use the tappable insets so we can draw under the status bar in gesture mode
                     Insets tappableInsets = windowInsets.getTappableElementInsets();
                     view.setPadding(tappableInsets.left,
-                            tappableInsets.top,
+                            getSafeTopInset(windowInsets),
                             tappableInsets.right,
                             0);
 
@@ -221,7 +221,24 @@ public class UiHelper {
             });
 
             activity.getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
+            rootView.requestApplyInsets();
+            rootView.post(rootView::requestApplyInsets);
         }
+    }
+
+    private static int getSafeTopInset(WindowInsets windowInsets) {
+        // Android 10 OEM builds may return zero for any one of these inset sources when
+        // transparent system bars and cutout layout are enabled. Use the largest reported
+        // safe bound so ordinary page content never overlaps the status bar or notch.
+        int insetTop = Math.max(windowInsets.getTappableElementInsets().top,
+                windowInsets.getStableInsetTop());
+        insetTop = Math.max(insetTop, windowInsets.getSystemWindowInsetTop());
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+                windowInsets.getDisplayCutout() != null) {
+            insetTop = Math.max(insetTop,
+                    windowInsets.getDisplayCutout().getSafeInsetTop());
+        }
+        return insetTop;
     }
 
     public static void showDecoderCrashDialog(Activity activity) {
@@ -304,6 +321,12 @@ public class UiHelper {
 
     public static void notifyNewRootViewImmersive(final Activity activity)
     {
+        notifyNewRootViewImmersive(activity, true);
+    }
+
+    public static void notifyNewRootViewImmersive(final Activity activity,
+                                                   boolean applyTvOverscanPadding)
+    {
         View rootView = activity.findViewById(android.R.id.content);
         UiModeManager modeMgr = (UiModeManager) activity.getSystemService(Context.UI_MODE_SERVICE);
 
@@ -321,13 +344,15 @@ public class UiHelper {
         }
 
         if (modeMgr.getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION) {
-            // Increase view padding on TVs
-            float scale = activity.getResources().getDisplayMetrics().density;
-            int verticalPaddingPixels = (int) (TV_VERTICAL_PADDING_DP*scale + 0.5f);
-            int horizontalPaddingPixels = (int) (TV_HORIZONTAL_PADDING_DP*scale + 0.5f);
+            if (applyTvOverscanPadding) {
+                // Increase view padding on TVs
+                float scale = activity.getResources().getDisplayMetrics().density;
+                int verticalPaddingPixels = (int) (TV_VERTICAL_PADDING_DP*scale + 0.5f);
+                int horizontalPaddingPixels = (int) (TV_HORIZONTAL_PADDING_DP*scale + 0.5f);
 
-            rootView.setPadding(horizontalPaddingPixels, verticalPaddingPixels,
-                    horizontalPaddingPixels, verticalPaddingPixels);
+                rootView.setPadding(horizontalPaddingPixels, verticalPaddingPixels,
+                        horizontalPaddingPixels, verticalPaddingPixels);
+            }
         }
         else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             // Draw under the status bar on Android Q devices
@@ -345,7 +370,7 @@ public class UiHelper {
                     View topInsetView = activity.findViewById(R.id.rv_top_view);
                     if (topInsetView != null) {
                         topInsetView.setPadding(0,
-                                tappableInsets.top,
+                                getSafeTopInset(windowInsets),
                                 0,
                                 0);
                     }
@@ -363,6 +388,8 @@ public class UiHelper {
             });
 
             activity.getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
+            rootView.requestApplyInsets();
+            rootView.post(rootView::requestApplyInsets);
         }
     }
 }

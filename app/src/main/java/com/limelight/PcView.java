@@ -79,6 +79,7 @@ import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.widget.ImageButton;
 import android.widget.ImageView;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -101,6 +102,7 @@ public class PcView extends Activity {
     private static final String PREF_HOST_LANDSCAPE_LIST_MODE =
             "home_host_landscape_list_mode";
     private static final String ADD_HOST_SELECTION = "__moonlight_add_host__";
+    private static final int PORTRAIT_HOST_LIST_MIN_HEIGHT_DP = 88;
 
     private AlertDialog pairingDialog;
     private PcGridAdapter pcGridAdapter;
@@ -186,7 +188,8 @@ public class PcView extends Activity {
 
     private void initializeViews() {
         setContentView(R.layout.activity_pc_view_new);
-        UiHelper.notifyNewRootViewImmersive(this);
+        // This layout owns its TV-safe content padding, so keep the background edge-to-edge.
+        UiHelper.notifyNewRootViewImmersive(this, false);
         // Allow floating expanded PiP overlays while browsing PCs
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             setShouldDockBigOverlays(false);
@@ -1125,9 +1128,10 @@ public class PcView extends Activity {
             boolean phonePortrait = getResources().getConfiguration().smallestScreenWidthDp < 600;
             int carouselHeightDp;
             if (hostCarousel.isListMode()) {
-                int maxVisibleRows = heightDp < 720 ? 3 : heightDp < 840 ? 4 : 5;
-                int visibleRows = Math.min(hostCarousel.getHostCount(), maxVisibleRows);
-                carouselHeightDp = visibleRows == 0 ? 0 : visibleRows * 88;
+                // Let the list consume the unused ScrollView viewport instead of fixing its
+                // height to the current host count. RecyclerView keeps individual rows fixed
+                // and scrolls internally when there are more hosts than the available space.
+                carouselHeightDp = PORTRAIT_HOST_LIST_MIN_HEIGHT_DP;
             }
             else if (phonePortrait) {
                 if (heightDp < 720) {
@@ -1148,6 +1152,10 @@ public class PcView extends Activity {
             }
             else {
                 carouselHeightDp = 390;
+            }
+            if (carouselParams instanceof LinearLayout.LayoutParams) {
+                ((LinearLayout.LayoutParams) carouselParams).weight =
+                        hostCarousel.isListMode() ? 1f : 0f;
             }
             carouselParams.height = UiHelper.dpToPx(this, carouselHeightDp);
         }
@@ -1204,10 +1212,29 @@ public class PcView extends Activity {
                 insetBottom = insets.bottom;
             }
             else {
-                insetLeft = windowInsets.getStableInsetLeft();
-                insetTop = windowInsets.getStableInsetTop();
-                insetRight = windowInsets.getStableInsetRight();
-                insetBottom = windowInsets.getStableInsetBottom();
+                // Some Android 10 OEM builds report zero stable insets when a transparent
+                // status bar and display-cutout layout are both enabled. The current system
+                // window insets still contain the visible bar bounds on those devices.
+                insetLeft = Math.max(windowInsets.getStableInsetLeft(),
+                        windowInsets.getSystemWindowInsetLeft());
+                insetTop = Math.max(windowInsets.getStableInsetTop(),
+                        windowInsets.getSystemWindowInsetTop());
+                insetRight = Math.max(windowInsets.getStableInsetRight(),
+                        windowInsets.getSystemWindowInsetRight());
+                insetBottom = Math.max(windowInsets.getStableInsetBottom(),
+                        windowInsets.getSystemWindowInsetBottom());
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+                        windowInsets.getDisplayCutout() != null) {
+                    insetLeft = Math.max(insetLeft,
+                            windowInsets.getDisplayCutout().getSafeInsetLeft());
+                    insetTop = Math.max(insetTop,
+                            windowInsets.getDisplayCutout().getSafeInsetTop());
+                    insetRight = Math.max(insetRight,
+                            windowInsets.getDisplayCutout().getSafeInsetRight());
+                    insetBottom = Math.max(insetBottom,
+                            windowInsets.getDisplayCutout().getSafeInsetBottom());
+                }
             }
             if (ignoreHorizontalInsets) {
                 insetLeft = 0;
@@ -1221,6 +1248,9 @@ public class PcView extends Activity {
             return windowInsets;
         });
         root.requestApplyInsets();
+        // requestApplyInsets() from onCreate() can be ignored by some Android 10 OEM builds
+        // before the decor view is attached. Request once more from the UI queue after attach.
+        root.post(root::requestApplyInsets);
     }
 
     private boolean isTelevision() {

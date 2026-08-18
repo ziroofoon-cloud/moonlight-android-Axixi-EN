@@ -300,7 +300,8 @@ public class AppView extends Activity implements AdapterFragmentCallbacks {
             setShouldDockBigOverlays(false);
         }
 
-        UiHelper.notifyNewRootViewImmersive(this);
+        // This layout already gives the app grid TV-safe margins. Avoid insetting its background.
+        UiHelper.notifyNewRootViewImmersive(this, false);
 
         showHiddenApps = getIntent().getBooleanExtra(SHOW_HIDDEN_APPS_EXTRA, false);
         uuidString = getIntent().getStringExtra(UUID_EXTRA);
