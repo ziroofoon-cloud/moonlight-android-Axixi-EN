@@ -11,6 +11,10 @@ public class PerfOverlayStats {
     public float totalFps;
     public float receivedFps;
     public float renderedFps;
+    /** Video-frame loss inferred from decode-unit frame-number gaps, not raw RTP packet loss. */
+    public float frameLossPercent;
+    /** @deprecated Use {@link #frameLossPercent}. Kept for existing HUD formatting. */
+    @Deprecated
     public float packetLossPercent;
     public float decodeTimeMs = -1f;
     public float hostProcessingLatencyMs;
@@ -21,6 +25,11 @@ public class PerfOverlayStats {
     public long videoBytes;
     public long audioBytes;
     public long totalNetworkBytes;
+
+    public long framesReceived;
+    public long framesRendered;
+    public long framesLost;
+    public long frameLossEvents;
 
     public boolean hdr;
     public String codecName;

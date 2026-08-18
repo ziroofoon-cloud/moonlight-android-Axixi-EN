@@ -14,9 +14,9 @@ android {
         minSdk 21
         targetSdk 34
 
-        versionName "26.08.15"
+        versionName "26.08.18"
         versionCode = 500
-        buildConfigField "int", "AXI_CODE", "20"
+        buildConfigField "int", "AXI_CODE", "21"
         buildConfigField "boolean", "HAS_KISHI_HAPTICS", gradle.ext.hasKishiHaptics.toString()
         buildConfigField "boolean", "HAS_STEREO3D_AI", gradle.ext.hasStereo3dAi.toString()
         // Generate native debug symbols to allow Google Play to symbolicate our native crashes
@@ -96,7 +96,7 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix ".debug"
-            resValue "string", "app_label", "D·月光"
+            resValue "string", "app_label", "西·月光"
             resValue "string", "app_label_root", "DR·月光"
 
             minifyEnabled true

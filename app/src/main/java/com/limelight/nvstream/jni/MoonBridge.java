@@ -449,6 +449,14 @@ public class MoonBridge {
     // The RTT is in the top 32 bits, and the RTT variance is in the bottom 32 bits
     public static native long getEstimatedRttInfo();
 
+    private static native long[] getRtpStatsNative();
+
+    public static RtpStatsSnapshot getRtpStats() {
+        long[] values = getRtpStatsNative();
+        return values != null ? RtpStatsSnapshot.fromNative(values)
+                : RtpStatsSnapshot.unavailable();
+    }
+
     public static native String getLaunchUrlQueryParameters();
 
     public static native byte guessControllerType(int vendorId, int productId);

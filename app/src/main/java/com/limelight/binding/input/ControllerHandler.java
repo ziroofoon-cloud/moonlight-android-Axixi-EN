@@ -4395,6 +4395,53 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         return getUsbControllerProtocolDisplayName(context.device);
     }
 
+    /** Privacy-safe summary for distinguishing Android system input from app-owned USB drivers. */
+    public synchronized String getSystemControllerDiagnosticsDisplayName() {
+        if (inputDeviceContexts.size() == 0) {
+            return "无";
+        }
+
+        StringBuilder summary = new StringBuilder();
+        for (int i = 0; i < inputDeviceContexts.size(); i++) {
+            InputDeviceContext context = inputDeviceContexts.valueAt(i);
+            if (summary.length() > 0) {
+                summary.append(';');
+            }
+            summary.append('P').append(context.controllerNumber & 0xFFFF)
+                    .append(':').append(getInputControllerTypeDisplayName(context))
+                    .append("(vid=0x").append(Integer.toHexString(context.vendorId))
+                    .append(",pid=0x").append(Integer.toHexString(context.productId))
+                    .append(",name=").append(sanitizeDiagnosticValue(context.name))
+                    .append(",source=0x").append(Integer.toHexString(
+                            context.inputDevice != null ? context.inputDevice.getSources() : 0))
+                    .append(",rumble=").append(getSystemRumbleRouteName(context))
+                    .append(')');
+        }
+        return summary.toString();
+    }
+
+    private String getSystemRumbleRouteName(InputDeviceContext context) {
+        if (prefConfig.enableDeviceRumble && deviceVibrator != null && deviceVibrator.hasVibrator()) {
+            return "forced-device";
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && context.vibratorManager != null) {
+            return context.quadVibrators ? "vibrator-manager-4" : "vibrator-manager";
+        }
+        if (context.vibrator != null && context.vibrator.hasVibrator()) {
+            return "input-vibrator";
+        }
+        return "sce-or-none";
+    }
+
+    private static String sanitizeDiagnosticValue(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return "--";
+        }
+        String sanitized = value.replace(',', '_').replace(';', '_')
+                .replace('\r', ' ').replace('\n', ' ');
+        return sanitized.length() <= 48 ? sanitized : sanitized.substring(0, 48);
+    }
+
     public String getNativeGameHapticsOutputRouteDisplayName() {
         return getRecentHapticsRoute(
                 nativeGameHapticsOutputRoute, nativeGameHapticsOutputTimeMs);

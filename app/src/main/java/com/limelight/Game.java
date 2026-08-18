@@ -38,7 +38,10 @@ import com.limelight.nvstream.input.KeyboardPacket;
 import com.limelight.nvstream.input.MouseButtonPacket;
 import com.limelight.nvstream.jni.MoonBridge;
 import com.limelight.haptics.PcmHapticsBackend;
+import com.limelight.log.HapticsTelemetry;
+import com.limelight.log.StreamNetworkMonitor;
 import com.limelight.log.StreamSessionLogger;
+import com.limelight.log.StreamTelemetryReporter;
 import com.limelight.preferences.GlPreferences;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.ui.gamemenu.GameMenuFragment;
@@ -150,6 +153,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     private static final String EXTRA_BACKGROUND_RECONNECT_ATTEMPT = "BackgroundReconnectAttempt";
     private static final int MAX_BACKGROUND_RECONNECT_ATTEMPTS = 3;
     private static final long BACKGROUND_RECONNECT_GRACE_MS = 10_000L;
+    private static final long SESSION_TELEMETRY_LOG_INTERVAL_MS = 5_000L;
     private static final int STEREO_FULL_SBS_WIDTH = 3840;
     private static final int STEREO_HALF_SBS_WIDTH = 1920;
     private static final int STEREO_FULL_SBS_HEIGHT_1080 = 1080;
@@ -202,6 +206,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     private static final long DS_TOUCHPAD_CLICK_DURATION_MS = 60L;
 
     private ControllerHandler controllerHandler;
+    private boolean controllerHandlerStopped;
     private KeyboardTranslator keyboardTranslator;
     private KeyBoardController virtualController;
 
@@ -227,7 +232,11 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     private String streamHost;
     private long streamStartElapsedMs;
     private StreamSessionLogger streamSessionLogger;
-    private long lastSessionPerfLogElapsedMs;
+    private StreamNetworkMonitor streamNetworkMonitor;
+    private HapticsTelemetry hapticsTelemetry;
+    private StreamTelemetryReporter streamTelemetryReporter;
+    private volatile PerfOverlayStats latestSessionPerfStats;
+    private volatile long latestSessionPerfStatsElapsedMs;
     private int lastLoggedConnectionStatus = Integer.MIN_VALUE;
     private NvApp app;
     private float desiredRefreshRate;
@@ -341,6 +350,16 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     private boolean restartMicAfterBackground;
     private PowerManager.WakeLock backgroundStreamWakeLock;
     private final Handler backgroundReconnectHandler = new Handler(Looper.getMainLooper());
+    private final Handler sessionTelemetryHandler = new Handler(Looper.getMainLooper());
+    private final Runnable sessionTelemetryRunnable = new Runnable() {
+        @Override
+        public void run() {
+            emitSessionTelemetry();
+            if (streamTelemetryReporter != null) {
+                sessionTelemetryHandler.postDelayed(this, SESSION_TELEMETRY_LOG_INTERVAL_MS);
+            }
+        }
+    };
     private volatile long backgroundReconnectEligibleUntilElapsedMs;
     private volatile int backgroundReconnectAttempt;
     private volatile boolean pendingBackgroundReconnect;
@@ -457,6 +476,16 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         pcName = getIntent().getStringExtra(EXTRA_PC_NAME);
         backgroundReconnectAttempt = getIntent().getIntExtra(EXTRA_BACKGROUND_RECONNECT_ATTEMPT, 0);
         streamSessionLogger = StreamSessionLogger.create(this, prefConfig, pcName, appName);
+        if (streamSessionLogger != null) {
+            hapticsTelemetry = new HapticsTelemetry(streamSessionLogger);
+            streamTelemetryReporter = new StreamTelemetryReporter(
+                    streamSessionLogger, hapticsTelemetry);
+            streamNetworkMonitor = new StreamNetworkMonitor(this,
+                    summary -> logSessionInfo("NETWORK_LINK", summary));
+            streamNetworkMonitor.start();
+            sessionTelemetryHandler.postDelayed(
+                    sessionTelemetryRunnable, SESSION_TELEMETRY_LOG_INTERVAL_MS);
+        }
         logSessionInfo("LIFECYCLE", "串流页面已创建");
         if (backgroundReconnectAttempt > 0) {
             logSessionInfo("CONNECT", "开始后台回连，第 " + backgroundReconnectAttempt + "/"
@@ -1818,6 +1847,8 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     protected void onDestroy() {
         logSessionInfo("LIFECYCLE", "串流页面正在销毁");
         backgroundReconnectHandler.removeCallbacksAndMessages(null);
+        sessionTelemetryHandler.removeCallbacksAndMessages(null);
+        emitSessionTelemetry();
         releaseExternalDisplayRouting();
         releaseDsTouchpadInput();
 
@@ -1843,6 +1874,15 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             stopConnection();
         }
 
+        String finalSessionState = buildSessionStateText();
+        if (controllerHandler != null) {
+            stopControllerHandler("activity-destroy");
+        }
+        if (streamTelemetryReporter != null) {
+            streamTelemetryReporter.finish(reportedCrash
+                            ? "decoder-error" : "activity-destroy",
+                    finalSessionState);
+        }
         if (controllerHandler != null) {
             controllerHandler.destroy();
         }
@@ -1875,6 +1915,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         // Destroy the capture provider
         inputCaptureProvider.destroy();
 
+        if (streamNetworkMonitor != null) {
+            streamNetworkMonitor.stop();
+            streamNetworkMonitor = null;
+        }
         if (streamSessionLogger != null) {
             streamSessionLogger.close(reportedCrash ? "解码器异常后结束" : "串流页面已关闭");
             streamSessionLogger = null;
@@ -1927,7 +1971,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         if (isFinishing()) {
             // Stop any further input device notifications before we lose focus (and pointer capture)
             if (controllerHandler != null) {
-                controllerHandler.stop();
+                stopControllerHandler("activity-finishing");
             }
 
             // Ungrab input to prevent further input device notifications
@@ -3396,7 +3440,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             updatePipAutoEnter();
             audioRenderer = null;
 
-            controllerHandler.stop();
+            stopControllerHandler("connection-stop");
 
             // Update GameManager state to indicate we're no longer in game
             UiHelper.notifyStreamEnded(this);
@@ -3504,7 +3548,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
                 // Stop processing controller input
-                controllerHandler.stop();
+                stopControllerHandler("connection-terminated-" + errorCode);
 
                 // Ungrab input
                 setInputGrabState(false);
@@ -3703,10 +3747,20 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     @Override
     public void rumble(short controllerNumber, short lowFreqMotor, short highFreqMotor) {
         if (streamSessionBackgrounded) {
+            if (hapticsTelemetry != null) {
+                hapticsTelemetry.recordRumble(controllerNumber, lowFreqMotor, highFreqMotor,
+                        controllerHandler != null
+                                ? controllerHandler.getNativeGameHapticsOutputRouteDisplayName() : "",
+                        true);
+            }
             return;
         }
         LimeLog.info(String.format((Locale)null, "Rumble on gamepad %d: %04x %04x", controllerNumber, lowFreqMotor, highFreqMotor));
         controllerHandler.handleRumble(controllerNumber, lowFreqMotor, highFreqMotor);
+        if (hapticsTelemetry != null) {
+            hapticsTelemetry.recordRumble(controllerNumber, lowFreqMotor, highFreqMotor,
+                    controllerHandler.getNativeGameHapticsOutputRouteDisplayName(), false);
+        }
         //联动扳机震动
         if(prefConfig.gameTriggerRumbleLink){
             rumbleTriggers(controllerNumber,lowFreqMotor,highFreqMotor);
@@ -3828,6 +3882,13 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                     "Native controller PCM started on gamepad %d: %d Hz %dch %dbit bytes=%d",
                     controllerNumber, sampleRate, channels & 0xFF, bitsPerSample & 0xFF,
                     pcm != null ? pcm.length : 0));
+            logSessionInfo("HAPTICS_PCM", String.format(Locale.US,
+                    "state=start, pad=%d, sampleRate=%d, channels=%d, bits=%d, bytes=%d, route=%s",
+                    controllerNumber & 0xFFFF, sampleRate, channels & 0xFF,
+                    bitsPerSample & 0xFF, pcm != null ? pcm.length : 0,
+                    controllerHandler != null
+                            ? nonEmpty(controllerHandler.getNativeGameHapticsOutputRouteDisplayName(), "none")
+                            : "none"));
         }
         else if (nowMs - nativeControllerPcmStatsStartedMs >=
                 NATIVE_CONTROLLER_PCM_STATS_INTERVAL_MS) {
@@ -3837,6 +3898,16 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                     unsignedSequence, nativeControllerPcmSequenceGaps,
                     nativeControllerPcmPeaks[0], nativeControllerPcmPeaks[1],
                     nativeControllerPcmPeaks[2], nativeControllerPcmPeaks[3]));
+            logSessionInfo("HAPTICS_PCM", String.format(Locale.US,
+                    "state=periodic, pad=%d, windows=%d, bytes=%d, sequence=%d, gaps=%d, "
+                            + "peak=%d/%d/%d/%d, route=%s",
+                    controllerNumber & 0xFFFF, nativeControllerPcmFrames,
+                    nativeControllerPcmBytes, unsignedSequence, nativeControllerPcmSequenceGaps,
+                    nativeControllerPcmPeaks[0], nativeControllerPcmPeaks[1],
+                    nativeControllerPcmPeaks[2], nativeControllerPcmPeaks[3],
+                    controllerHandler != null
+                            ? nonEmpty(controllerHandler.getNativeGameHapticsOutputRouteDisplayName(), "none")
+                            : "none"));
             nativeControllerPcmStatsStartedMs = nowMs;
             nativeControllerPcmFrames = 0;
             nativeControllerPcmBytes = 0;
@@ -4075,21 +4146,9 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
     @Override
     public void onPerfUpdate(final PerfOverlayStats stats) {
-        long now = SystemClock.elapsedRealtime();
-        if (stats != null && now - lastSessionPerfLogElapsedMs >= 10000) {
-            lastSessionPerfLogElapsedMs = now;
-            logSessionInfo("PERF", String.format(Locale.US,
-                    "%dx%d %s, FPS %.1f/%.1f, 网络 %.0f Kbps, 视频 %.0f Kbps, 音频 %.0f Kbps, "
-                            + "延迟 %d±%d ms, 丢包 %.2f%%, 解码 %.2f ms, 主机 %.2f ms",
-                    stats.width, stats.height, nonEmpty(stats.codecName, "--"),
-                    stats.renderedFps, stats.receivedFps, stats.networkRateKbps,
-                    stats.videoRateKbps, stats.audioRateKbps, stats.networkLatencyMs,
-                    stats.networkLatencyVarianceMs, stats.packetLossPercent,
-                    stats.decodeTimeMs, stats.hostProcessingLatencyMs));
-            logSessionInfo("STATE", "渲染=" + buildRenderPipelineText()
-                    + "；USB手柄=" + buildUsbControllerStatusText()
-                    + "；游戏震动=" + buildNativeGameHapticsStatusText()
-                    + "；音频震动=" + buildAudioHapticsStatusText());
+        if (streamTelemetryReporter != null && stats != null) {
+            latestSessionPerfStatsElapsedMs = SystemClock.elapsedRealtime();
+            latestSessionPerfStats = stats;
         }
         runOnUiThread(new Runnable() {
             @Override
@@ -4712,7 +4771,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
         getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         if (controllerHandler != null) {
-            controllerHandler.stop();
+            stopControllerHandler("background-reconnect-" + errorCode);
         }
         if (grabbedInput) {
             setInputGrabState(false);
@@ -4847,6 +4906,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             setInputGrabState(false);
         }
         if (controllerHandler != null) {
+            recordExplicitHapticsStop("background-suspend");
             controllerHandler.stopAllHaptics();
             controllerHandler.disableSensors();
         }
@@ -5721,6 +5781,60 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         if (streamSessionLogger != null) {
             streamSessionLogger.error(category, message, throwable);
         }
+    }
+
+    private void emitSessionTelemetry() {
+        StreamTelemetryReporter reporter = streamTelemetryReporter;
+        PerfOverlayStats stats = latestSessionPerfStats;
+        if (reporter == null || stats == null) {
+            return;
+        }
+
+        long nowMs = SystemClock.elapsedRealtime();
+        long statsAgeMs = Math.max(0L, nowMs - latestSessionPerfStatsElapsedMs);
+        long rttInfo = MoonBridge.getEstimatedRttInfo();
+        int rttMs = rttInfo == -1L ? -1 : (int) (rttInfo >> 32);
+        int rttVarianceMs = rttInfo == -1L ? -1 : (int) rttInfo;
+        logSessionInfo("PERF", String.format(Locale.US,
+                "%dx%d %s, FPS %.1f/%.1f, 网络 %.0f Kbps, 视频 %.0f Kbps, 音频 %.0f Kbps, "
+                        + "延迟 %d±%d ms, 视频帧丢失 %.2f%%, 解码 %.2f ms, 主机 %.2f ms, "
+                        + "统计年龄 %d ms",
+                stats.width, stats.height, nonEmpty(stats.codecName, "--"),
+                stats.renderedFps, stats.receivedFps, stats.networkRateKbps,
+                stats.videoRateKbps, stats.audioRateKbps, rttMs, rttVarianceMs,
+                stats.frameLossPercent, stats.decodeTimeMs, stats.hostProcessingLatencyMs,
+                statsAgeMs));
+        reporter.record(stats, MoonBridge.getRtpStats(), rttMs, rttVarianceMs, statsAgeMs,
+                streamNetworkMonitor != null
+                        ? streamNetworkMonitor.getCurrentSummary() : "unavailable",
+                buildSessionStateText());
+    }
+
+    private String buildSessionStateText() {
+        return "渲染=" + buildRenderPipelineText()
+                + "；系统手柄=" + (controllerHandler != null
+                        ? controllerHandler.getSystemControllerDiagnosticsDisplayName() : "未初始化")
+                + "；USB手柄=" + buildUsbControllerStatusText()
+                + "；游戏震动=" + buildNativeGameHapticsStatusText()
+                + "；音频震动=" + buildAudioHapticsStatusText();
+    }
+
+    private void recordExplicitHapticsStop(String reason) {
+        if (hapticsTelemetry == null) {
+            return;
+        }
+        hapticsTelemetry.recordExplicitStop(reason,
+                controllerHandler != null
+                        ? controllerHandler.getNativeGameHapticsOutputRouteDisplayName() : "");
+    }
+
+    private void stopControllerHandler(String reason) {
+        if (controllerHandler == null || controllerHandlerStopped) {
+            return;
+        }
+        recordExplicitHapticsStop(reason);
+        controllerHandler.stop();
+        controllerHandlerStopped = true;
     }
 
     private boolean isRecordAudioPermissionGranted() {

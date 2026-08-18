@@ -1534,7 +1534,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         // Flip stats windows roughly every second
         if (SystemClock.uptimeMillis() >= activeWindowVideoStats.measurementStartTimestamp + 1000) {
-            if (prefs.enablePerfOverlay) {
+            if (prefs.enablePerfOverlay || prefs.enableStreamSessionLogging) {
                 VideoStats lastTwo = new VideoStats();
                 lastTwo.add(lastWindowVideoStats);
                 lastTwo.add(activeWindowVideoStats);
@@ -1577,9 +1577,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 stats.totalFps = fps.totalFps;
                 stats.receivedFps = fps.receivedFps;
                 stats.renderedFps = fps.renderedFps;
-                stats.packetLossPercent = lastTwo.totalFrames > 0
+                stats.frameLossPercent = lastTwo.totalFrames > 0
                         ? (float)lastTwo.framesLost / lastTwo.totalFrames * 100
                         : 0f;
+                stats.packetLossPercent = stats.frameLossPercent;
                 stats.networkLatencyMs = (int)(rttInfo >> 32);
                 stats.networkLatencyVarianceMs = (int)rttInfo;
                 stats.decodeTimeMs = decodeTimeMs;
@@ -1598,6 +1599,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 stats.hdr = (videoFormat & MoonBridge.VIDEO_FORMAT_MASK_10BIT) != 0;
                 stats.codecName = video_format;
                 stats.decoderName = decoder;
+
+                VideoStats cumulativeStats = new VideoStats();
+                cumulativeStats.add(globalVideoStats);
+                cumulativeStats.add(activeWindowVideoStats);
+                stats.framesReceived = cumulativeStats.totalFramesReceived;
+                stats.framesRendered = cumulativeStats.totalFramesRendered;
+                stats.framesLost = cumulativeStats.framesLost;
+                stats.frameLossEvents = cumulativeStats.frameLossEvents;
 
                 perfListener.onPerfUpdate(stats);
             }

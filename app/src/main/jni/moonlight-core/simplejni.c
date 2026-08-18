@@ -218,6 +218,43 @@ Java_com_limelight_nvstream_jni_MoonBridge_getEstimatedRttInfo(JNIEnv *env, jcla
     return ((uint64_t)rtt << 32U) | variance;
 }
 
+JNIEXPORT jlongArray JNICALL
+Java_com_limelight_nvstream_jni_MoonBridge_getRtpStatsNative(JNIEnv *env, jclass clazz) {
+    const RTP_VIDEO_STATS* videoStats = LiGetRTPVideoStats();
+    const RTP_AUDIO_STATS* audioStats = LiGetRTPAudioStats();
+    jlong values[18] = {0};
+
+    // Index 0 is a schema version so Java can reject mismatched native layouts safely.
+    values[0] = 1;
+    if (videoStats != NULL) {
+        values[1] = (jlong)(uint64_t)videoStats->packetCountVideo;
+        values[2] = (jlong)(uint64_t)videoStats->packetCountFec;
+        values[3] = (jlong)(uint64_t)videoStats->packetCountFecRecovered;
+        values[4] = (jlong)(uint64_t)videoStats->packetCountFecFailed;
+        values[5] = (jlong)(uint64_t)videoStats->packetCountOOS;
+        values[6] = (jlong)(uint64_t)videoStats->packetCountInvalid;
+        values[7] = (jlong)(uint64_t)videoStats->packetCountFecInvalid;
+    }
+    if (audioStats != NULL) {
+        values[8] = (jlong)(uint64_t)audioStats->packetCountAudio;
+        values[9] = (jlong)(uint64_t)audioStats->packetCountFec;
+        values[10] = (jlong)(uint64_t)audioStats->packetCountFecRecovered;
+        values[11] = (jlong)(uint64_t)audioStats->packetCountFecFailed;
+        values[12] = (jlong)(uint64_t)audioStats->packetCountOOS;
+        values[13] = (jlong)(uint64_t)audioStats->packetCountInvalid;
+        values[14] = (jlong)(uint64_t)audioStats->packetCountFecInvalid;
+    }
+    values[15] = LiGetPendingVideoFrames();
+    values[16] = LiGetPendingAudioFrames();
+    values[17] = LiGetPendingAudioDuration();
+
+    jlongArray result = (*env)->NewLongArray(env, 18);
+    if (result != NULL) {
+        (*env)->SetLongArrayRegion(env, result, 0, 18, values);
+    }
+    return result;
+}
+
 JNIEXPORT jstring JNICALL
 Java_com_limelight_nvstream_jni_MoonBridge_getLaunchUrlQueryParameters(JNIEnv *env, jclass clazz) {
     return (*env)->NewStringUTF(env, LiGetLaunchUrlQueryParameters());
