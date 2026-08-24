@@ -26,6 +26,9 @@ import com.limelight.binding.video.PerfOverlayListener;
 import com.limelight.binding.video.PerfOverlayStats;
 import com.limelight.fsr.FsrVideoProcessor;
 import com.limelight.fsr.VideoProcessingGLSurfaceView;
+// EXTENSION DEVELOPMENT [EXT-IME-ACCESSORY-BAR] [MODIFIED] BEGIN
+import com.limelight.extensions.keyboard.ImeKeyboardExtensionController;
+// EXTENSION DEVELOPMENT [EXT-IME-ACCESSORY-BAR] [MODIFIED] END
 import com.limelight.stereo3d.Stereo3dOutputLayout;
 import com.limelight.nvstream.MicUplinkConnection;
 import com.limelight.nvstream.NvConnection;
@@ -205,6 +208,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     private KeyBoardController keyBoardController;
 
     private KeyBoardLayoutController keyBoardLayoutController;
+
+    // EXTENSION DEVELOPMENT [EXT-IME-ACCESSORY-BAR] [MODIFIED] BEGIN
+    private ImeKeyboardExtensionController imeKeyboardExtensionController;
+    // EXTENSION DEVELOPMENT [EXT-IME-ACCESSORY-BAR] [MODIFIED] END
 
     public PreferenceConfiguration prefConfig;
     private SharedPreferences tombstonePrefs;
@@ -933,6 +940,23 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         InputManager inputManager = (InputManager) getSystemService(Context.INPUT_SERVICE);
         inputManager.registerInputDeviceListener(keyboardTranslator, null);
 
+        // EXTENSION DEVELOPMENT [EXT-IME-ACCESSORY-BAR] [MODIFIED] BEGIN
+        imeKeyboardExtensionController = new ImeKeyboardExtensionController(
+                this,
+                (FrameLayout) rootView,
+                (keyCode, down) -> keyboardEvent(down, (short) keyCode),
+                // EXTENSION DEVELOPMENT [EXT-IME-VIDEO-VIEWPORT] [MODIFIED] BEGIN
+                streamView,
+                fsrView,
+                () -> {
+                    if (videoZoomController != null) {
+                        videoZoomController.refreshAfterHostSizeChanged();
+                    }
+                }
+                // EXTENSION DEVELOPMENT [EXT-IME-VIDEO-VIEWPORT] [MODIFIED] END
+        );
+        // EXTENSION DEVELOPMENT [EXT-IME-ACCESSORY-BAR] [MODIFIED] END
+
         // Initialize touch contexts
 //        for (int i = 0; i < touchContextMap.length; i++) {
 //            if (!prefConfig.touchscreenTrackpad) {
@@ -1323,6 +1347,12 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
 
+        // EXTENSION DEVELOPMENT [EXT-IME-ACCESSORY-BAR] [MODIFIED] BEGIN
+        if (!hasFocus && imeKeyboardExtensionController != null) {
+            imeKeyboardExtensionController.releasePressedKeys();
+        }
+        // EXTENSION DEVELOPMENT [EXT-IME-ACCESSORY-BAR] [MODIFIED] END
+
         // We can't guarantee the state of modifiers keys which may have
         // lifted while focus was not on us. Clear the modifier state.
         this.modifierFlags = 0;
@@ -1637,6 +1667,13 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         logSessionInfo("LIFECYCLE", "串流页面正在销毁");
         backgroundReconnectHandler.removeCallbacksAndMessages(null);
         releaseExternalDisplayRouting();
+
+        // EXTENSION DEVELOPMENT [EXT-IME-ACCESSORY-BAR] [MODIFIED] BEGIN
+        if (imeKeyboardExtensionController != null) {
+            imeKeyboardExtensionController.destroy();
+            imeKeyboardExtensionController = null;
+        }
+        // EXTENSION DEVELOPMENT [EXT-IME-ACCESSORY-BAR] [MODIFIED] END
 
         if (virtualMouseOverlay != null) {
             virtualMouseOverlay.destroy();
