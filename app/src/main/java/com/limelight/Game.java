@@ -35,6 +35,9 @@ import com.limelight.nvstream.http.ComputerDetails;
 import com.limelight.nvstream.http.NvApp;
 import com.limelight.nvstream.http.NvHTTP;
 import com.limelight.nvstream.input.KeyboardPacket;
+// EXTENSION DEVELOPMENT [EXT-IME-ASCII-INPUT] [MODIFIED] BEGIN
+import com.limelight.extensions.input.ImeAsciiInputExtension;
+// EXTENSION DEVELOPMENT [EXT-IME-ASCII-INPUT] [MODIFIED] END
 import com.limelight.nvstream.input.MouseButtonPacket;
 import com.limelight.nvstream.jni.MoonBridge;
 import com.limelight.haptics.PcmHapticsBackend;
@@ -2022,6 +2025,46 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         return (byte) modifierFlags;
     }
 
+    // EXTENSION DEVELOPMENT [EXT-IME-ASCII-INPUT] [MODIFIED] BEGIN
+    private void sendImeCommittedText(String text) {
+        ImeAsciiInputExtension.KeyStroke[] keyStrokes = ImeAsciiInputExtension.mapText(text);
+        if (keyStrokes == null || !dispatchImeAsciiKeyStrokes(keyStrokes)) {
+            conn.sendUtf8Text(text);
+        }
+    }
+
+    private String getPrintableAsciiImeKeyEventText(KeyEvent event) {
+        if (event.getDeviceId() != KeyCharacterMap.VIRTUAL_KEYBOARD) {
+            return null;
+        }
+
+        int unicodeCharacter = event.getUnicodeChar();
+        if (!ImeAsciiInputExtension.isPrintableAscii(unicodeCharacter)) {
+            return null;
+        }
+
+        return String.valueOf((char) unicodeCharacter);
+    }
+
+    private boolean dispatchImeAsciiKeyStrokes(ImeAsciiInputExtension.KeyStroke[] keyStrokes) {
+        short[] keyMaps = new short[keyStrokes.length];
+        for (int i = 0; i < keyStrokes.length; i++) {
+            keyMaps[i] = keyboardTranslator.translate(keyStrokes[i].getAndroidKeyCode(), -1);
+            if (keyMaps[i] == 0) {
+                return false;
+            }
+        }
+
+        for (int i = 0; i < keyStrokes.length; i++) {
+            byte modifiers = (byte) ((getModifierState() & ~KeyboardPacket.MODIFIER_SHIFT)
+                    | keyStrokes[i].getRequiredModifiers());
+            conn.sendKeyboardInput(keyMaps[i], KeyboardPacket.KEY_DOWN, modifiers, (byte) 0);
+            conn.sendKeyboardInput(keyMaps[i], KeyboardPacket.KEY_UP, modifiers, (byte) 0);
+        }
+        return true;
+    }
+    // EXTENSION DEVELOPMENT [EXT-IME-ASCII-INPUT] [MODIFIED] END
+
     private boolean isPhysicalKeyboardEscapeMenuEvent(KeyEvent event) {
         if (!prefConfig.keyboardEscOpensGameMenu || !connected
                 || event.getKeyCode() != KeyEvent.KEYCODE_ESCAPE
@@ -2107,6 +2150,16 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 return false;
             }
 
+            // EXTENSION DEVELOPMENT [EXT-IME-ASCII-INPUT] [MODIFIED] BEGIN
+            // Some IMEs emit printable symbols as mapped key codes without their required Shift
+            // state. For example, KEYCODE_PLUS otherwise takes the raw '=' mapping below.
+            String imeAsciiText = getPrintableAsciiImeKeyEventText(event);
+            if (imeAsciiText != null) {
+                sendImeCommittedText(imeAsciiText);
+                return true;
+            }
+            // EXTENSION DEVELOPMENT [EXT-IME-ASCII-INPUT] [MODIFIED] END
+
             // We'll send it as a raw key event if we have a key mapping, otherwise we'll send it
             // as UTF-8 text (if it's a printable character).
             short translated = keyboardTranslator.translate(event.getKeyCode(), event.getDeviceId());
@@ -2118,7 +2171,9 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 // UTF-8 events don't auto-repeat on the host side.
                 int unicodeChar = event.getUnicodeChar();
                 if ((unicodeChar & KeyCharacterMap.COMBINING_ACCENT) == 0 && (unicodeChar & KeyCharacterMap.COMBINING_ACCENT_MASK) != 0) {
-                    conn.sendUtf8Text(""+(char)unicodeChar);
+                    // EXTENSION DEVELOPMENT [EXT-IME-ASCII-INPUT] [MODIFIED] BEGIN
+                    sendImeCommittedText(""+(char)unicodeChar);
+                    // EXTENSION DEVELOPMENT [EXT-IME-ASCII-INPUT] [MODIFIED] END
                     return true;
                 }
 
@@ -2194,6 +2249,13 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 return false;
             }
 
+            // EXTENSION DEVELOPMENT [EXT-IME-ASCII-INPUT] [MODIFIED] BEGIN
+            // Key down was emitted as a complete normalized stroke by the ASCII extension.
+            if (getPrintableAsciiImeKeyEventText(event) != null) {
+                return true;
+            }
+            // EXTENSION DEVELOPMENT [EXT-IME-ASCII-INPUT] [MODIFIED] END
+
             short translated = keyboardTranslator.translate(event.getKeyCode(), event.getDeviceId());
             if (translated == 0) {
                 // If we sent this event as UTF-8 on key down, also report that it was handled
@@ -2227,7 +2289,9 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             return false;
         }
 
-        conn.sendUtf8Text(event.getCharacters());
+        // EXTENSION DEVELOPMENT [EXT-IME-ASCII-INPUT] [MODIFIED] BEGIN
+        sendImeCommittedText(event.getCharacters());
+        // EXTENSION DEVELOPMENT [EXT-IME-ASCII-INPUT] [MODIFIED] END
         return true;
     }
 
