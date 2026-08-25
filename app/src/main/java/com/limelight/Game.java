@@ -16,6 +16,9 @@ import com.limelight.binding.input.driver.UsbDriverService;
 import com.limelight.binding.input.evdev.EvdevListener;
 import com.limelight.binding.input.touch.RelativeTouchSwitchContext;
 import com.limelight.binding.input.touch.TouchContext;
+// EXTENSION DEVELOPMENT [EXT-TOUCHPAD-MULTI-GESTURE] [MODIFIED] BEGIN
+import com.limelight.extensions.input.touch.MultiGestureTouchpadExtensionController;
+// EXTENSION DEVELOPMENT [EXT-TOUCHPAD-MULTI-GESTURE] [MODIFIED] END
 import com.limelight.binding.input.virtual_controller.VirtualController;
 import com.limelight.binding.input.virtual_controller.keyboard.KeyBoardController;
 import com.limelight.binding.input.virtual_controller.keyboard.KeyBoardLayoutController;
@@ -242,6 +245,9 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     private VirtualMouseOverlay virtualMouseOverlay;
     private VideoZoomController videoZoomController;
     private VideoZoomGestureOverlay videoZoomGestureOverlay;
+    // EXTENSION DEVELOPMENT [EXT-TOUCHPAD-MULTI-GESTURE] [MODIFIED] BEGIN
+    private MultiGestureTouchpadExtensionController multiGestureTouchpadController;
+    // EXTENSION DEVELOPMENT [EXT-TOUCHPAD-MULTI-GESTURE] [MODIFIED] END
     private final PointF videoZoomTapPoint = new PointF();
     private final PointF videoZoomInputPoint = new PointF();
     private final RectF videoZoomBaseRect = new RectF();
@@ -1642,6 +1648,12 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             virtualMouseOverlay.destroy();
             virtualMouseOverlay = null;
         }
+        // EXTENSION DEVELOPMENT [EXT-TOUCHPAD-MULTI-GESTURE] [MODIFIED] BEGIN
+        if (multiGestureTouchpadController != null) {
+            multiGestureTouchpadController.destroy();
+            multiGestureTouchpadController = null;
+        }
+        // EXTENSION DEVELOPMENT [EXT-TOUCHPAD-MULTI-GESTURE] [MODIFIED] END
         if (videoZoomGestureOverlay != null) {
             videoZoomGestureOverlay.destroy();
             videoZoomGestureOverlay = null;
@@ -2947,6 +2959,11 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                                 for (TouchContext aTouchContext : touchContextMap) {
                                     aTouchContext.cancelTouch();
                                 }
+                                // EXTENSION DEVELOPMENT [EXT-TOUCHPAD-MULTI-GESTURE] [MODIFIED] BEGIN
+                                if (multiGestureTouchpadController != null) {
+                                    multiGestureTouchpadController.cancelUntilNextGesture();
+                                }
+                                // EXTENSION DEVELOPMENT [EXT-TOUCHPAD-MULTI-GESTURE] [MODIFIED] END
                                 return true;
                             }
                             break;
@@ -2996,8 +3013,23 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                         aTouchContext.cancelTouch();
                     }
 
+                    // EXTENSION DEVELOPMENT [EXT-TOUCHPAD-MULTI-GESTURE] [MODIFIED] BEGIN
+                    if (multiGestureTouchpadController != null) {
+                        multiGestureTouchpadController.cancelUntilNextGesture();
+                    }
+                    // EXTENSION DEVELOPMENT [EXT-TOUCHPAD-MULTI-GESTURE] [MODIFIED] END
+
                     return true;
                 }
+
+                // EXTENSION DEVELOPMENT [EXT-TOUCHPAD-MULTI-GESTURE] [MODIFIED] BEGIN
+                // This mode needs the complete MotionEvent to classify scroll and pinch before
+                // the legacy path splits it into independent per-pointer contexts.
+                if (multiGestureTouchpadController != null
+                        && multiGestureTouchpadController.onTouchEvent(view, event)) {
+                    return true;
+                }
+                // EXTENSION DEVELOPMENT [EXT-TOUCHPAD-MULTI-GESTURE] [MODIFIED] END
 
                 TouchContext context = getTouchContext(actionIndex);
                 if (context == null) {
@@ -4205,6 +4237,12 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
     public void switchMouseModel(int which){
         disableMouseModel=false;
+        // EXTENSION DEVELOPMENT [EXT-TOUCHPAD-MULTI-GESTURE] [MODIFIED] BEGIN
+        if (multiGestureTouchpadController != null) {
+            multiGestureTouchpadController.destroy();
+            multiGestureTouchpadController = null;
+        }
+        // EXTENSION DEVELOPMENT [EXT-TOUCHPAD-MULTI-GESTURE] [MODIFIED] END
         //多点触控
         if(which==0){
             prefConfig.enableMultiTouchScreen=true;
@@ -4223,6 +4261,11 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         //禁用鼠标
         if(which==3){
             disableMouseModel=true;
+            // EXTENSION DEVELOPMENT [EXT-TOUCHPAD-MULTI-GESTURE] [MODIFIED] BEGIN
+            // Refresh overlay routing after the extension controller was detached above.
+            setVirtualMouseInputSuppressed(false);
+            setVideoZoomInputSuppressed(false);
+            // EXTENSION DEVELOPMENT [EXT-TOUCHPAD-MULTI-GESTURE] [MODIFIED] END
             return;
         }
         //普通鼠标 左右键互换
@@ -4242,6 +4285,21 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             prefConfig.enableMultiTouchScreen=false;
             prefConfig.touchscreenTrackpad=true;
         }
+
+        // EXTENSION DEVELOPMENT [EXT-TOUCHPAD-MULTI-GESTURE] [MODIFIED] BEGIN
+        // Dedicated mode for the isolated multi-gesture touchpad extension.
+        if(which==MultiGestureTouchpadExtensionController.MODE_ID){
+            prefConfig.enableMultiTouchScreen=false;
+            prefConfig.touchscreenTrackpad=true;
+            multiGestureTouchpadController = new MultiGestureTouchpadExtensionController(
+                    this,
+                    conn,
+                    streamView,
+                    (View) rootView,
+                    prefConfig,
+                    videoZoomController);
+        }
+        // EXTENSION DEVELOPMENT [EXT-TOUCHPAD-MULTI-GESTURE] [MODIFIED] END
 
         for (int i = 0; i < touchContextMap.length; i++) {
             if (!prefConfig.touchscreenTrackpad) {
@@ -4263,6 +4321,12 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 }
             }
         }
+
+        // EXTENSION DEVELOPMENT [EXT-TOUCHPAD-MULTI-GESTURE] [MODIFIED] BEGIN
+        // Hide other full-screen touch layers while this mode owns touchscreen gestures.
+        setVirtualMouseInputSuppressed(false);
+        setVideoZoomInputSuppressed(false);
+        // EXTENSION DEVELOPMENT [EXT-TOUCHPAD-MULTI-GESTURE] [MODIFIED] END
     }
 
     public void showHUD(){
@@ -4668,6 +4732,9 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         virtualMouseOverlay.setInputSuppressed(suppressed
                 || disableMouseModel
                 || getScreenMoveZoom()
+                // EXTENSION DEVELOPMENT [EXT-TOUCHPAD-MULTI-GESTURE] [MODIFIED] BEGIN
+                || multiGestureTouchpadController != null
+                // EXTENSION DEVELOPMENT [EXT-TOUCHPAD-MULTI-GESTURE] [MODIFIED] END
                 || isHidingOverlays
                 || gameMenuShowing
                 || fullKeyboardShowing
@@ -4685,6 +4752,9 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         boolean fullKeyboardShowing = keyBoardLayoutController != null
                 && keyBoardLayoutController.isVisible();
         videoZoomGestureOverlay.setInputSuppressed(suppressed
+                // EXTENSION DEVELOPMENT [EXT-TOUCHPAD-MULTI-GESTURE] [MODIFIED] BEGIN
+                || multiGestureTouchpadController != null
+                // EXTENSION DEVELOPMENT [EXT-TOUCHPAD-MULTI-GESTURE] [MODIFIED] END
                 || isHidingOverlays
                 || gameMenuShowing
                 || fullKeyboardShowing
