@@ -10,6 +10,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.util.AttributeSet;
 import android.util.SparseIntArray;
+import android.view.InputDevice;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
@@ -294,6 +295,12 @@ public final class VirtualMouseOverlay extends View implements VirtualMouseContr
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
+        // The virtual mouse is a touchscreen control. Pen input must continue to the stream even
+        // when the pen lands on one of this full-screen overlay's interactive regions.
+        if (isStylusEvent(event)) {
+            return false;
+        }
+
         if (controller == null || !controller.isEnabled() || controller.isInputSuppressed()) {
             return false;
         }
@@ -324,6 +331,31 @@ public final class VirtualMouseOverlay extends View implements VirtualMouseContr
             default:
                 return pointerTargets.size() > 0;
         }
+    }
+
+    @Override
+    public boolean onHoverEvent(MotionEvent event) {
+        // Clickable Views consume hover by default. Explicitly decline stylus hover so the
+        // StreamView can forward hover position, pressure/distance, and tool state to the host.
+        if (isStylusEvent(event)) {
+            return false;
+        }
+        return super.onHoverEvent(event);
+    }
+
+    private static boolean isStylusEvent(MotionEvent event) {
+        if (event.isFromSource(InputDevice.SOURCE_STYLUS)) {
+            return true;
+        }
+
+        for (int i = 0; i < event.getPointerCount(); i++) {
+            int toolType = event.getToolType(i);
+            if (toolType == MotionEvent.TOOL_TYPE_STYLUS
+                    || toolType == MotionEvent.TOOL_TYPE_ERASER) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Override
