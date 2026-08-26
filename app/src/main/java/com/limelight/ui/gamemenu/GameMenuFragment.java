@@ -370,33 +370,40 @@ public class GameMenuFragment extends BaseGameMenuDialog implements View.OnClick
             return;
         }
         if(v.getId()==R.id.bt_touch_list){
+            // EXTENSION DEVELOPMENT [EXT-TOUCHPAD-MULTI-GESTURE] [MODIFIED] BEGIN
+            // Keep actions appended after the mouse modes stable when extensions add modes.
+            final int mouseModeCount = getResources()
+                    .getStringArray(R.array.mouse_model_names_axi).length;
+            // EXTENSION DEVELOPMENT [EXT-TOUCHPAD-MULTI-GESTURE] [MODIFIED] END
             GameListMouseFragment fragment=new GameListMouseFragment();
             fragment.setWidth(UiHelper.dpToPx(getActivity(),364));
             fragment.setTitle("鼠标与触控");
             fragment.setOnClick(new GameListMouseFragment.onClick() {
                 @Override
                 public void click(String title, int index) {
-                    if(!TextUtils.isEmpty(title)&&index!=8){
+                    // EXTENSION DEVELOPMENT [EXT-TOUCHPAD-MULTI-GESTURE] [MODIFIED] BEGIN
+                    if(!TextUtils.isEmpty(title)&&index!=mouseModeCount + 1){
                         Toast.makeText(getActivity(),title,Toast.LENGTH_SHORT).show();
                     }
                     if(game==null||index<0){
                         return;
                     }
-                    if(index==7){
+                    if(index==mouseModeCount){
                         game.switchMouseLocalCursor();
                         return;
                     }
-                    if(index==8){
+                    if(index==mouseModeCount + 1){
                         game.prefConfig.absoluteMouseMode=!game.prefConfig.absoluteMouseMode;
                         Toast.makeText(getActivity(),"远程桌面鼠标模式"+(game.prefConfig.absoluteMouseMode?"已启用！":"已禁用！"),Toast.LENGTH_SHORT).show();
                         return;
                     }
-                    if(index==9){
+                    if(index==mouseModeCount + 2){
                         if(conn!=null){
                             sendKeys(new short[]{KeyboardTranslator.VK_LCONTROL,KeyboardTranslator.VK_LMENU, KeyboardTranslator.VK_LSHIFT, KeyboardTranslator.VK_N});
                         }
                         return;
                     }
+                    // EXTENSION DEVELOPMENT [EXT-TOUCHPAD-MULTI-GESTURE] [MODIFIED] END
                     game.switchMouseModel(index);
                 }
             });
