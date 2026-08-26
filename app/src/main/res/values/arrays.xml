@@ -266,6 +266,9 @@
         <item>普通鼠标「左右键互换」</item>
         <item>触控板「仅移动」</item>
         <item>触控板「移动+左键点击」</item>
+        <!-- EXTENSION DEVELOPMENT [EXT-TOUCHPAD-MULTI-GESTURE] [MODIFIED] BEGIN -->
+        <item>触控板「多手势」</item>
+        <!-- EXTENSION DEVELOPMENT [EXT-TOUCHPAD-MULTI-GESTURE] [MODIFIED] END -->
     </string-array>
 
     <string-array name="mouse_model_values_axi" translatable="false">
@@ -276,6 +279,9 @@
         <item>4</item>
         <item>5</item>
         <item>6</item>
+        <!-- EXTENSION DEVELOPMENT [EXT-TOUCHPAD-MULTI-GESTURE] [MODIFIED] BEGIN -->
+        <item>7</item>
+        <!-- EXTENSION DEVELOPMENT [EXT-TOUCHPAD-MULTI-GESTURE] [MODIFIED] END -->
     </string-array>
 
 

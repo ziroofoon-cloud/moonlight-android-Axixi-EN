@@ -135,6 +135,23 @@ public final class VideoZoomController {
         return true;
     }
 
+    // EXTENSION DEVELOPMENT [EXT-TOUCHPAD-MULTI-GESTURE] [MODIFIED] BEGIN
+    /** Maps a normalized remote-video cursor position into the transformed local viewport. */
+    public boolean mapNormalizedVideoToPoint(float normalizedX, float normalizedY,
+                                             PointF outPoint) {
+        if (!updateBaseVideoRect() || baseVideoRect.width() <= 0f || baseVideoRect.height() <= 0f) {
+            return false;
+        }
+
+        outPoint.set(
+                baseVideoRect.left + clamp(normalizedX, 0f, 1f) * baseVideoRect.width() * scale
+                        + panX + externalOffsetX,
+                baseVideoRect.top + clamp(normalizedY, 0f, 1f) * baseVideoRect.height() * scale
+                        + panY + externalOffsetY);
+        return true;
+    }
+    // EXTENSION DEVELOPMENT [EXT-TOUCHPAD-MULTI-GESTURE] [MODIFIED] END
+
     public void destroy() {
         scale = MIN_SCALE;
         panX = 0f;
