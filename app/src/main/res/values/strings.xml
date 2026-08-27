@@ -448,8 +448,9 @@
     <string name="game_menu_enable_virtual_mouse">虚拟鼠标</string>
     <string name="game_menu_disable_virtual_mouse">虚拟鼠标</string>
     <string name="game_menu_ds_touchpad">DS触控板</string>
-    <string name="game_menu_ds_touchpad_shown">DS触控板已显示</string>
+    <string name="game_menu_ds_touchpad_shown">DS触控板已开启：5秒无操作后自动隐藏；触摸原位置可唤醒，按住右下角可拖动位置</string>
     <string name="game_menu_ds_touchpad_hidden">DS触控板已隐藏</string>
+    <string name="game_menu_ds_touchpad_drag_handle">拖动DS触控板</string>
     <string name="virtual_mouse_accessibility_hidden">虚拟鼠标已隐藏</string>
     <string name="virtual_mouse_accessibility_compact">虚拟鼠标，点击展开，拖动可移动</string>
     <string name="virtual_mouse_accessibility_expanded">虚拟鼠标已展开，包含左右键、滚轮和指针移动区</string>

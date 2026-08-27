@@ -161,6 +161,7 @@ public class GameKeyboardUpdateFragment extends BaseGameMenuDialog implements Vi
                         contentValues.append(Integer.parseInt(tag));
                         contentNames.append(view.getText().toString().trim());
                         tx_content.setText(contentNames.toString());
+                        edt_name.setText(contentNames.toString());
                         return true;
                 }
                 return false;

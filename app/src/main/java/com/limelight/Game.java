@@ -131,6 +131,7 @@ import android.view.View;
 import android.view.View.OnGenericMotionListener;
 import android.view.View.OnSystemUiVisibilityChangeListener;
 import android.view.View.OnTouchListener;
+import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.view.ViewOutlineProvider;
 import android.view.ViewParent;
@@ -213,6 +214,8 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
     private static final int THREE_FINGER_TAP_THRESHOLD = 300;
     private static final long DS_TOUCHPAD_CLICK_DURATION_MS = 60L;
+    private static final long DS_TOUCHPAD_AUTO_HIDE_DELAY_MS = 5_000L;
+    private static final long DS_TOUCHPAD_FADE_DURATION_MS = 200L;
 
     private ControllerHandler controllerHandler;
     private boolean controllerHandlerStopped;
@@ -266,13 +269,36 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     private FsrVideoProcessor fsrVideoProcessor;
     private VirtualMouseOverlay virtualMouseOverlay;
     private FrameLayout dsTouchpadPanel;
+    private FrameLayout dsTouchpadWindow;
     private DsTouchpadView dsTouchpadView;
+    private View dsTouchpadDragHandle;
     private boolean dsTouchpadVisible;
     private boolean dsTouchpadSessionPrepared;
+    private boolean dsTouchpadTouchActive;
+    private boolean dsTouchpadDragging;
+    private boolean dsTouchpadDragMoved;
+    private boolean dsTouchpadPositionCustomized;
+    private float dsTouchpadPositionRatioX = 0.5f;
+    private float dsTouchpadPositionRatioY;
+    private float dsTouchpadDragStartRawX;
+    private float dsTouchpadDragStartRawY;
+    private int dsTouchpadDragStartLeft;
+    private int dsTouchpadDragStartTop;
+    private int dsTouchpadDragTouchSlop;
     private final Runnable dsTouchpadButtonReleaseRunnable = () -> {
         if (controllerHandler != null) {
             controllerHandler.reportVirtualDsTouchpadButton(false);
         }
+    };
+    private final Runnable dsTouchpadAutoHideRunnable = () -> {
+        if (!isDsTouchpadAutoHideEligible() || dsTouchpadTouchActive || dsTouchpadDragging) {
+            return;
+        }
+
+        dsTouchpadWindow.animate()
+                .alpha(0.0f)
+                .setDuration(DS_TOUCHPAD_FADE_DURATION_MS)
+                .start();
     };
     private VideoZoomController videoZoomController;
     private VideoZoomGestureOverlay videoZoomGestureOverlay;
@@ -657,7 +683,11 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         rootView=streamView.getParent();
 
         dsTouchpadPanel = findViewById(R.id.dsTouchpadPanel);
+        dsTouchpadWindow = findViewById(R.id.dsTouchpadWindow);
         dsTouchpadView = findViewById(R.id.dsTouchpadView);
+        dsTouchpadDragHandle = findViewById(R.id.dsTouchpadDragHandle);
+        dsTouchpadDragTouchSlop = ViewConfiguration.get(this).getScaledTouchSlop();
+        bindDsTouchpadDragHandle();
         dsTouchpadPanel.post(this::updateDsTouchpadLayout);
 
         videoZoomGestureOverlay = findViewById(R.id.videoZoomGestureOverlay);
@@ -1178,19 +1208,49 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         }
 
         if (!show) {
+            cancelDsTouchpadDrag();
             releaseDsTouchpadInput();
         }
         dsTouchpadVisible = show;
         updateDsTouchpadVisibility();
         Toast.makeText(this, show ? R.string.game_menu_ds_touchpad_shown :
-                R.string.game_menu_ds_touchpad_hidden, Toast.LENGTH_SHORT).show();
+                R.string.game_menu_ds_touchpad_hidden,
+                show ? Toast.LENGTH_LONG : Toast.LENGTH_SHORT).show();
         return dsTouchpadVisible;
     }
 
+    @SuppressLint("ClickableViewAccessibility")
     private void bindDsTouchpadView() {
         if (dsTouchpadView == null) {
             return;
         }
+
+        dsTouchpadView.setOnTouchListener((view, event) -> {
+            if (event == null) {
+                return false;
+            }
+
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    dsTouchpadTouchActive = true;
+                    revealDsTouchpad();
+                    break;
+                case MotionEvent.ACTION_MOVE:
+                    if (dsTouchpadTouchActive) {
+                        revealDsTouchpad();
+                    }
+                    break;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    dsTouchpadTouchActive = false;
+                    scheduleDsTouchpadAutoHide();
+                    break;
+                default:
+                    break;
+            }
+            // Observe the gesture without consuming it. DsTouchpadView still owns DS input.
+            return false;
+        });
 
         dsTouchpadView.setListener(new DsTouchpadView.Listener() {
             @Override
@@ -1246,6 +1306,75 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         });
     }
 
+    @SuppressLint("ClickableViewAccessibility")
+    private void bindDsTouchpadDragHandle() {
+        if (dsTouchpadDragHandle == null) {
+            return;
+        }
+
+        dsTouchpadDragHandle.setOnTouchListener((view, event) -> {
+            if (event == null || isStylusMotionEvent(event)) {
+                return false;
+            }
+
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN: {
+                    if (!dsTouchpadVisible || dsTouchpadWindow == null ||
+                            dsTouchpadPanel == null ||
+                            dsTouchpadPanel.getVisibility() != View.VISIBLE) {
+                        return false;
+                    }
+
+                    releaseDsTouchpadInput();
+                    dsTouchpadDragging = true;
+                    dsTouchpadDragMoved = false;
+                    dsTouchpadDragStartRawX = event.getRawX();
+                    dsTouchpadDragStartRawY = event.getRawY();
+                    FrameLayout.LayoutParams params =
+                            (FrameLayout.LayoutParams) dsTouchpadWindow.getLayoutParams();
+                    dsTouchpadDragStartLeft = params.leftMargin;
+                    dsTouchpadDragStartTop = params.topMargin;
+                    ViewParent parent = view.getParent();
+                    if (parent != null) {
+                        parent.requestDisallowInterceptTouchEvent(true);
+                    }
+                    revealDsTouchpad();
+                    return true;
+                }
+                case MotionEvent.ACTION_MOVE:
+                    if (dsTouchpadDragging) {
+                        updateDsTouchpadDragPosition(event.getRawX(), event.getRawY());
+                    }
+                    return true;
+                case MotionEvent.ACTION_POINTER_UP:
+                    finishDsTouchpadDrag(true);
+                    return true;
+                case MotionEvent.ACTION_UP:
+                    finishDsTouchpadDrag(true);
+                    return true;
+                case MotionEvent.ACTION_CANCEL:
+                    finishDsTouchpadDrag(true);
+                    return true;
+                default:
+                    return dsTouchpadDragging;
+            }
+        });
+    }
+
+    private static boolean isStylusMotionEvent(MotionEvent event) {
+        if (event.isFromSource(InputDevice.SOURCE_STYLUS)) {
+            return true;
+        }
+        for (int i = 0; i < event.getPointerCount(); i++) {
+            int toolType = event.getToolType(i);
+            if (toolType == MotionEvent.TOOL_TYPE_STYLUS ||
+                    toolType == MotionEvent.TOOL_TYPE_ERASER) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private void reportDsTouchpadEvent(byte eventType, int pointerId,
                                        float x, float y, float pressure) {
         if (controllerHandler != null) {
@@ -1255,6 +1384,8 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     }
 
     private void releaseDsTouchpadInput() {
+        dsTouchpadTouchActive = false;
+        cancelDsTouchpadAutoHide();
         if (dsTouchpadView != null) {
             dsTouchpadView.removeCallbacks(dsTouchpadButtonReleaseRunnable);
             dsTouchpadView.releaseTouches();
@@ -1274,8 +1405,17 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         boolean show = dsTouchpadVisible && isDsTouchpadSupported() && !isHidingOverlays;
         dsTouchpadPanel.setVisibility(show ? View.VISIBLE : View.GONE);
         if (show) {
-            dsTouchpadPanel.post(this::updateDsTouchpadLayout);
+            dsTouchpadPanel.post(() -> {
+                updateDsTouchpadLayout();
+                revealDsTouchpadAndScheduleAutoHide();
+            });
             dsTouchpadPanel.bringToFront();
+        }
+        else {
+            cancelDsTouchpadAutoHide();
+            if (dsTouchpadWindow != null) {
+                dsTouchpadWindow.setAlpha(1.0f);
+            }
         }
     }
 
@@ -1286,7 +1426,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     }
 
     private void updateDsTouchpadLayout() {
-        if (dsTouchpadView == null) {
+        if (dsTouchpadWindow == null || dsTouchpadPanel == null) {
             return;
         }
 
@@ -1296,15 +1436,132 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         int width = Math.min(Math.round(metrics.widthPixels * (portrait ? 0.52f : 0.28f)),
                 UiHelper.dpToPx(this, 300));
         int height = Math.max(UiHelper.dpToPx(this, 118), Math.round(width * 0.56f));
-        FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) dsTouchpadView.getLayoutParams();
+        int panelWidth = dsTouchpadPanel.getWidth() > 0 ?
+                dsTouchpadPanel.getWidth() : metrics.widthPixels;
+        int panelHeight = dsTouchpadPanel.getHeight() > 0 ?
+                dsTouchpadPanel.getHeight() : metrics.heightPixels;
+        int maxLeft = Math.max(0, panelWidth - width);
+        int maxTop = Math.max(0, panelHeight - height);
+        int left;
+        int top;
+        if (dsTouchpadPositionCustomized) {
+            left = Math.round(maxLeft * clampUnit(dsTouchpadPositionRatioX));
+            top = Math.round(maxTop * clampUnit(dsTouchpadPositionRatioY));
+        }
+        else {
+            left = maxLeft / 2;
+            top = Math.min(maxTop, UiHelper.dpToPx(this, portrait ? 100 : 48));
+        }
+
+        FrameLayout.LayoutParams params =
+                (FrameLayout.LayoutParams) dsTouchpadWindow.getLayoutParams();
         params.width = width;
         params.height = height;
-        params.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
-        params.topMargin = UiHelper.dpToPx(this, portrait ? 100 : 48);
-        params.leftMargin = 0;
+        params.gravity = Gravity.TOP | Gravity.LEFT;
+        params.leftMargin = left;
+        params.topMargin = top;
         params.rightMargin = 0;
         params.bottomMargin = 0;
-        dsTouchpadView.setLayoutParams(params);
+        dsTouchpadWindow.setLayoutParams(params);
+    }
+
+    private void updateDsTouchpadDragPosition(float rawX, float rawY) {
+        if (!dsTouchpadDragging || dsTouchpadWindow == null || dsTouchpadPanel == null) {
+            return;
+        }
+
+        float deltaX = rawX - dsTouchpadDragStartRawX;
+        float deltaY = rawY - dsTouchpadDragStartRawY;
+        if (!dsTouchpadDragMoved && Math.hypot(deltaX, deltaY) < dsTouchpadDragTouchSlop) {
+            return;
+        }
+        dsTouchpadDragMoved = true;
+        if (dsTouchpadDragHandle != null) {
+            dsTouchpadDragHandle.setPressed(true);
+        }
+
+        int maxLeft = Math.max(0, dsTouchpadPanel.getWidth() - dsTouchpadWindow.getWidth());
+        int maxTop = Math.max(0, dsTouchpadPanel.getHeight() - dsTouchpadWindow.getHeight());
+        int left = clampInt(dsTouchpadDragStartLeft + Math.round(deltaX), 0, maxLeft);
+        int top = clampInt(dsTouchpadDragStartTop + Math.round(deltaY), 0, maxTop);
+        FrameLayout.LayoutParams params =
+                (FrameLayout.LayoutParams) dsTouchpadWindow.getLayoutParams();
+        params.gravity = Gravity.TOP | Gravity.LEFT;
+        params.leftMargin = left;
+        params.topMargin = top;
+        dsTouchpadWindow.setLayoutParams(params);
+        rememberDsTouchpadPosition(left, top, maxLeft, maxTop);
+    }
+
+    private void rememberDsTouchpadPosition(int left, int top, int maxLeft, int maxTop) {
+        dsTouchpadPositionCustomized = true;
+        dsTouchpadPositionRatioX = maxLeft > 0 ? clampUnit((float) left / maxLeft) : 0.5f;
+        dsTouchpadPositionRatioY = maxTop > 0 ? clampUnit((float) top / maxTop) : 0.0f;
+    }
+
+    private void finishDsTouchpadDrag(boolean scheduleAutoHide) {
+        if (dsTouchpadDragHandle != null) {
+            dsTouchpadDragHandle.setPressed(false);
+        }
+        dsTouchpadDragging = false;
+        dsTouchpadDragMoved = false;
+        if (scheduleAutoHide) {
+            scheduleDsTouchpadAutoHide();
+        }
+    }
+
+    private void cancelDsTouchpadDrag() {
+        finishDsTouchpadDrag(false);
+    }
+
+    private void revealDsTouchpad() {
+        if (dsTouchpadWindow == null) {
+            return;
+        }
+        dsTouchpadWindow.removeCallbacks(dsTouchpadAutoHideRunnable);
+        dsTouchpadWindow.animate().cancel();
+        dsTouchpadWindow.setAlpha(1.0f);
+    }
+
+    private void revealDsTouchpadAndScheduleAutoHide() {
+        revealDsTouchpad();
+        scheduleDsTouchpadAutoHide();
+    }
+
+    private void scheduleDsTouchpadAutoHide() {
+        if (dsTouchpadWindow == null) {
+            return;
+        }
+        dsTouchpadWindow.removeCallbacks(dsTouchpadAutoHideRunnable);
+        if (isDsTouchpadAutoHideEligible() && !dsTouchpadTouchActive && !dsTouchpadDragging) {
+            dsTouchpadWindow.postDelayed(dsTouchpadAutoHideRunnable,
+                    DS_TOUCHPAD_AUTO_HIDE_DELAY_MS);
+        }
+    }
+
+    private void cancelDsTouchpadAutoHide() {
+        if (dsTouchpadWindow == null) {
+            return;
+        }
+        dsTouchpadWindow.removeCallbacks(dsTouchpadAutoHideRunnable);
+        dsTouchpadWindow.animate().cancel();
+    }
+
+    private boolean isDsTouchpadAutoHideEligible() {
+        boolean gameMenuShowing = dialogGameMenu != null &&
+                dialogGameMenu.getDialog() != null && dialogGameMenu.getDialog().isShowing();
+        return dsTouchpadWindow != null && dsTouchpadPanel != null && dsTouchpadVisible &&
+                isDsTouchpadSupported() && !isHidingOverlays && activityResumed &&
+                hasWindowFocus() && !gameMenuShowing &&
+                dsTouchpadPanel.getVisibility() == View.VISIBLE;
+    }
+
+    private static float clampUnit(float value) {
+        return Math.max(0.0f, Math.min(1.0f, value));
+    }
+
+    private static int clampInt(int value, int min, int max) {
+        return Math.max(min, Math.min(max, value));
     }
 
     private void setPreferredOrientationForCurrentDisplay() {
@@ -1358,6 +1615,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
+        cancelDsTouchpadDrag();
         releaseDsTouchpadInput();
         if (virtualMouseOverlay != null) {
             virtualMouseOverlay.cancelActiveInteractions();
@@ -1444,6 +1702,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         }
 
         updateDsTouchpadLayout();
+        revealDsTouchpadAndScheduleAutoHide();
 
         if (virtualMouseOverlay != null) {
             setVirtualMouseInputSuppressed(isHidingOverlays);
@@ -1585,6 +1844,13 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         }
         if (videoZoomGestureOverlay != null) {
             setVideoZoomInputSuppressed(!hasFocus);
+        }
+        if (hasFocus) {
+            revealDsTouchpadAndScheduleAutoHide();
+        }
+        else {
+            cancelDsTouchpadDrag();
+            releaseDsTouchpadInput();
         }
     }
 
@@ -1889,6 +2155,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         sessionTelemetryHandler.removeCallbacksAndMessages(null);
         emitSessionTelemetry();
         releaseExternalDisplayRouting();
+        cancelDsTouchpadDrag();
         releaseDsTouchpadInput();
 
         // EXTENSION DEVELOPMENT [EXT-IME-ACCESSORY-BAR] [MODIFIED] BEGIN
@@ -1982,6 +2249,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     protected void onResume() {
         super.onResume();
         activityResumed = true;
+        revealDsTouchpadAndScheduleAutoHide();
 
         if (virtualMouseOverlay != null) {
             setVirtualMouseInputSuppressed(false);
@@ -2002,6 +2270,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     @Override
     protected void onPause() {
         activityResumed = false;
+        cancelDsTouchpadDrag();
         releaseDsTouchpadInput();
 
         if (!isFinishing()) {
@@ -5344,6 +5613,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 dialogGameMenu.getDialog().isShowing()) {
             return;
         }
+        cancelDsTouchpadDrag();
         releaseDsTouchpadInput();
         setVirtualMouseInputSuppressed(true);
         setVideoZoomInputSuppressed(true);
@@ -5381,6 +5651,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             controllerHandler.setGameMenuVisible(false);
         }
         dialogGameMenu = null;
+        revealDsTouchpadAndScheduleAutoHide();
     }
 
     @Override

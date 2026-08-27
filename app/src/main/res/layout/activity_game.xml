@@ -163,13 +163,32 @@
         android:focusable="false"
         android:visibility="gone">
 
-        <com.limelight.ui.virtualcontroller.DsTouchpadView
-            android:id="@+id/dsTouchpadView"
+        <FrameLayout
+            android:id="@+id/dsTouchpadWindow"
             android:layout_width="260dp"
             android:layout_height="150dp"
             android:layout_gravity="top|center_horizontal"
             android:layout_marginTop="48dp"
-            android:contentDescription="@string/game_menu_ds_touchpad"
-            android:preferKeepClear="true" />
+            android:preferKeepClear="true">
+
+            <com.limelight.ui.virtualcontroller.DsTouchpadView
+                android:id="@+id/dsTouchpadView"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:contentDescription="@string/game_menu_ds_touchpad" />
+
+            <ImageView
+                android:id="@+id/dsTouchpadDragHandle"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:layout_gravity="end|bottom"
+                android:background="@drawable/bg_ds_touchpad_drag_handle"
+                android:clickable="false"
+                android:contentDescription="@string/game_menu_ds_touchpad_drag_handle"
+                android:focusable="false"
+                android:padding="8dp"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_axi_game_pad_move" />
+        </FrameLayout>
     </FrameLayout>
 </merge>
