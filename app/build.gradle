@@ -14,7 +14,7 @@ android {
         minSdk 21
         targetSdk 34
 
-        versionName "26.08.27"
+        versionName "26.08.28"
         versionCode = 500
         buildConfigField "int", "AXI_CODE", "23"
         buildConfigField "boolean", "HAS_KISHI_HAPTICS", gradle.ext.hasKishiHaptics.toString()

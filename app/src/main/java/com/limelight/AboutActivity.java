@@ -39,7 +39,7 @@ public class AboutActivity extends BaseActivity implements View.OnClickListener 
         ivLogo.setOutlineProvider(new ViewOutlineProvider() {
             @Override
             public void getOutline(View view, Outline outline) {
-                outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), 35f);
+                outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), 48f);
             }
         });
     }
@@ -82,7 +82,7 @@ public class AboutActivity extends BaseActivity implements View.OnClickListener 
         }
 
         if (v.getId() == R.id.iv_github) {
-            UpdateChecker.openUrl(this,"https://www.axixi.top/");
+            UpdateChecker.openUrl(this,"https://github.com/Axixi2233/moonlight-android/releases");
             return;
         }
 
@@ -94,6 +94,15 @@ public class AboutActivity extends BaseActivity implements View.OnClickListener 
         if (v.getId() == R.id.lv_credits) {
             startActivity(new Intent(this, CreditsActivity.class));
         }
+
+        if (v.getId() == R.id.lv_starcore) {
+            UpdateChecker.openUrl(this,"https://pan.quark.cn/s/9a334d831290");
+        }
+
+        if (v.getId() == R.id.lv_sunshine) {
+            UpdateChecker.openUrl(this,"https://pan.quark.cn/s/9a334d831290");
+        }
+
     }
 
     public static void showSponsoredQrDialog(Activity activity) {

@@ -208,6 +208,95 @@
             </LinearLayout>
 
             <LinearLayout
+                android:id="@+id/lv_sunshine"
+                android:layout_marginLeft="15dp"
+                android:layout_marginRight="15dp"
+                android:layout_marginBottom="15dp"
+                android:background="@drawable/axi_gameplay_gamepad_item_bg"
+                android:orientation="horizontal"
+                android:padding="12dp"
+                android:onClick="onClick"
+                android:gravity="center_vertical"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content">
+
+                <ImageView
+                    android:layout_marginLeft="10dp"
+                    android:src="@mipmap/ic_sunshine"
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"/>
+
+                <LinearLayout
+                    android:layout_marginLeft="12dp"
+                    android:orientation="vertical"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Sunshine·阿西西"
+                        android:textStyle="bold"
+                        android:textColor="@android:color/white"
+                        android:textSize="13sp"/>
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="搭配月光支持虚拟显示器、麦克风、DS5虚拟手柄等功能"
+                        android:textColor="@android:color/white"
+                        android:textSize="10sp"/>
+
+                </LinearLayout>
+
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/lv_starcore"
+                android:layout_marginLeft="15dp"
+                android:layout_marginRight="15dp"
+                android:layout_marginBottom="15dp"
+                android:background="@drawable/axi_gameplay_gamepad_item_bg"
+                android:orientation="horizontal"
+                android:padding="12dp"
+                android:onClick="onClick"
+                android:gravity="center_vertical"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content">
+
+                <ImageView
+                    android:layout_marginLeft="10dp"
+                    android:src="@mipmap/ic_starcore"
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"/>
+
+                <LinearLayout
+                    android:layout_marginLeft="12dp"
+                    android:orientation="vertical"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="StarCore 星核"
+                        android:textStyle="bold"
+                        android:textColor="@android:color/white"
+                        android:textSize="13sp"/>
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Mac被控端应用，搭配月光实现macOS端串流。"
+                        android:textColor="@android:color/white"
+                        android:textSize="10sp"/>
+
+                </LinearLayout>
+
+
+            </LinearLayout>
+
+            <LinearLayout
                 android:id="@+id/lv_other_app"
                 android:layout_marginLeft="15dp"
                 android:layout_marginRight="15dp"
